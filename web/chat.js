@@ -2506,6 +2506,12 @@ async function connectionView(){
     status.replaceChildren(name,' 已响应 · '+new Date(data.checkedAt).toLocaleTimeString())
     if(body.contains(status)){
       if(data.mode){body.append(element('p','quiet','本次检查的传输路径 · '+(routeLabels[data.mode]||data.mode)))}
+      const closed=data.lastDisconnect;
+      if(Number.isSafeInteger(closed?.at)){
+        const reason=closed.reason==='unclassified'?'原因未知':closed.reason;
+        const detail=[new Date(closed.at).toLocaleString(),reason,closed.code,closed.wsCode].filter(Boolean).join(' · ');
+        body.append(element('p','quiet','上次主机连接断开 · '+detail))
+      }
       body.append(element('p','quiet','主机 Codex App Server · '+(data.appServerReady?'已响应':'未确认响应')));
       body.append(element('p','quiet','Remote 原生 Codex 接口 · '+(data.nativeCodex?'主机已提供':'主机未提供')))
       if(thread&&data.appServerReady){

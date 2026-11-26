@@ -11,6 +11,7 @@ const directory=serverStorageDirectory(new IdentityStore().directory,url,'client
 export {directory as receiverIdentityDirectory};
 let connection;
 let boundDeviceId;
+let lastDisconnect=null;
 export function bindReceiverDevice(deviceId){
   if(typeof deviceId!=='string'||!deviceId)throw Error('缺少 Remote 设备 ID');
   if(boundDeviceId===deviceId)return;
@@ -146,14 +147,15 @@ try {
    const control=message.startsWith('Adaptive control channel closed:');
    closeDetail={at:Date.now(),code:/^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code)?error.code:null,
      reason:known.includes(message)?message:control?'control channel closed':'unclassified',
-     wsCode:control?Number(message.match(/(?:WebSocket(?: closed with code)? )(\d{4})/)?.[1])||null:null}
+     wsCode:control?Number(message.match(/(?:WebSocket(?: closed with code)? )(\d{4})/)?.[1])||null:null};
+   if(error?.code!=='CLIENT_CLOSED')lastDisconnect=closeDetail
  });
 
  const codex=remote.features.codex===true?new CodexRemoteClient(remote.client):null;
  const context={runtime,deviceId:target.deviceId,deviceName:target.name,
    nativeStream:codex,
    nativeCall:codex?(method,params)=>codex.request(method,params,AbortSignal.timeout(30000)):null,
-   closeDetail:()=>closeDetail,connected:()=>!closeDetail&&remote.client.getStats().connected,transportMode:()=>remote.transport.getStats().mode,nativeCodex:remote.features.codex===true};
+   lastDisconnect:()=>lastDisconnect,closeDetail:()=>closeDetail,connected:()=>!closeDetail&&remote.client.getStats().connected,transportMode:()=>remote.transport.getStats().mode,nativeCodex:remote.features.codex===true};
  if(codex){
    if(remote.features.remoteGateway){
      const {RemoteTypertGateway}=await import('./vendor/remote.mjs');

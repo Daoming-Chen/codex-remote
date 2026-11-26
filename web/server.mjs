@@ -1338,7 +1338,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     if(req.method==='POST'&&req.url==='/api/connection'){
       const ctx=deviceId&&await openRemote();
-      if(ctx?.nativeCall)return json(200,{host:deviceName,checkedAt:Date.now(),mode:ctx.transportMode(),nativeCodex:true,appServerReady:true});
+      if(ctx?.nativeCall)return json(200,{host:deviceName,checkedAt:Date.now(),mode:ctx.transportMode(),lastDisconnect:ctx.lastDisconnect?.(),nativeCodex:true,appServerReady:true});
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const path=await runtimeDriver();
       let mode,nativeCodex;
@@ -1346,7 +1346,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const result=JSON.parse(await readRemote(probe,(route,native)=>{
         mode=route;nativeCodex=native
       }));
-      return json(200,{host:deviceId?deviceName:'tim-SER',checkedAt:Date.now(),mode,nativeCodex,appServerReady:result.ready===true})
+      return json(200,{host:deviceId?deviceName:'tim-SER',checkedAt:Date.now(),mode,nativeCodex,lastDisconnect:ctx?.lastDisconnect?.(),appServerReady:result.ready===true})
     }
     if(req.method==='POST' && req.url?.split('?')[0]==='/api/models'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
