@@ -1980,7 +1980,7 @@ document.addEventListener('click',event=>{
   if(toggle){event.preventDefault();event.stopPropagation()}
 },true);
 document.addEventListener('keydown',event=>{
-  if(event.key!=='Escape'||event.defaultPrevented||!menuAnchor)return;
+  if(event.key!=='Escape'||event.defaultPrevented||!menuAnchor||isCompositionKey(event))return;
   const anchor=menuAnchor;event.preventDefault();closeDialog();anchor.focus({preventScroll:true})
 });
 
