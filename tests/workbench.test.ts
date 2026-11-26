@@ -181,3 +181,77 @@ test('authorization refresh discards a stale device before restoring a saved sel
     assert.equal(await page.locator('#devices button').count(), 0);
   } finally { await browser.close() }
 });
+
+test('restore a streaming turn after sending on another device with the same thread ID', async () => {
+  const browser = await chromium.launch(process.env.CHROMIUM_PATH
+    ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block' });
+    page.setDefaultTimeout(10000);
+    const hosts = ['a', 'b'].map(key => ({deviceId: key, scope: key.repeat(64), name: '同名设备', online: true}));
+    const origin = 'http://localhost:49004';
+    const template = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+    const jobs = new Map<string, {id: string; done: boolean}>();
+    const posts: string[] = [];
+    const wrongHost: string[] = [];
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      const device = hosts.find(host => path.startsWith('/devices/' + host.scope + '/'));
+      const api = device ? path.slice(('/devices/' + device.scope).length) : path;
+      if (path === '/api/devices') return route.fulfill({json: {devices: hosts}});
+      if (device && api === '/') return route.fulfill({contentType: 'text/html', body: renderWorkbenchPage(template, {
+        deviceName: device.name, scope: device.scope, version: '0123456789abcdef', dictationEngine: 'browser',
+      })});
+      if (api === '/api/native-capability') return route.fulfill({json: {native: false}});
+      if (device && api === '/api/turn') {
+        const {id} = route.request().postDataJSON();
+        posts.push(device.deviceId);
+        jobs.set(device.deviceId, {id, done: device.deviceId === 'b'});
+        return route.fulfill({json: {id}});
+      }
+      if (device && api.startsWith('/api/turn/')) {
+        const job = jobs.get(device.deviceId);
+        if (!job || api.split('/')[3] !== job.id) {
+          wrongHost.push(path);
+          return route.fulfill({status: 404});
+        }
+        const snapshot = {id: job.id, thread: 'shared-thread', turn: 'shared-turn',
+          progress: job.done ? {} : {message: '第一台正在流式输出'},
+          status: job.done ? 'done' : 'running', answer: job.done ? device.deviceId + ' 的最终回复' : ''};
+        if (api.endsWith('/events')) return route.fulfill({contentType: 'text/event-stream',
+          body: 'data: ' + JSON.stringify(snapshot) + '\n\n'});
+        return route.fulfill({json: snapshot});
+      }
+      if (api.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: [], ids: []}});
+      const file = path === '/devices' ? 'devices.html' : path.slice(1);
+      return route.fulfill({path: fileURLToPath(new URL('../web/' + file, import.meta.url))});
+    });
+    async function select(index: number) {
+      await page.goto(origin + '/devices');
+      const host = hosts[index];
+      await page.locator('#devices button').filter({has: page.getByText(host.deviceId, {exact: true})}).click();
+      await page.waitForURL('**/devices/' + host.scope + '/');
+    }
+    async function send(message: string) {
+      await page.locator('#prompt').fill(message);
+      await page.locator('#prompt').press('Enter');
+    }
+    const messages = page.locator('#messages');
+    await select(0);
+    const started = page.waitForRequest(req => req.url().includes('/api/turn/') && req.url().endsWith('/events'));
+    await send('第一台的提问');
+    await started;
+    await messages.getByText('第一台正在流式输出', {exact: true}).waitFor();
+    await select(1);
+    jobs.get('a')!.done = true;
+    await send('第二台的提问');
+    await messages.getByText('b 的最终回复', {exact: true}).waitFor();
+    assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台正在流式输出|a 的最终回复/);
+    await select(0);
+    await messages.getByText('a 的最终回复', {exact: true}).waitFor();
+    assert.match(await messages.innerText(), /第一台的提问/);
+    assert.doesNotMatch(await messages.innerText(), /第二台的提问|b 的最终回复/);
+    assert.deepEqual(posts, ['a', 'b']);
+    assert.deepEqual(wrongHost, []);
+  } finally { await browser.close() }
+});

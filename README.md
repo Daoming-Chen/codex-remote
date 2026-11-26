@@ -33,7 +33,7 @@ Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打�
 
 修改 `apps/`、`packages/` 或 `android/src/` 中的源码后运行 `npm run build`。构建使用 TypeScript、esbuild 和 Preact，将页面依赖打进本地资源，运行时无需前端 CDN。设备选择页、首页标题、模型命令搜索框、推理强度滑块、速度菜单和附件栏由 Preact 渲染。聊天流式更新、模型菜单和语音流程仍保留命令式实现。
 
-`npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、听写控制器、录音处理器、离线恢复页、构建脚本和浏览器测试。其余迁入 TypeScript 的控制器在构建时去除类型并检查生成脚本的语法。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览和草稿保留；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
+`npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、听写控制器、录音处理器、离线恢复页、构建脚本和浏览器测试。其余迁入 TypeScript 的控制器在构建时去除类型并检查生成脚本的语法。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览、草稿恢复，以及流式回复期间切换设备再返回的行为；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
 
 ## 构建 Web 包
 
