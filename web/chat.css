@@ -796,3 +796,10 @@ dialog.composer-menu{inset:auto auto var(--composer-bottom) var(--composer-left)
 .composer-menu .quiet,.composer-menu .preference-label{margin:6px 8px}
 
 dialog.sidebar-menu-above{bottom:var(--sidebar-menu-bottom);max-height:calc(100dvh - var(--sidebar-menu-bottom) - 8px)}
+
+dialog.rename-dialog{width:min(400px,calc(100vw - 32px))}
+.rename-dialog .quiet{margin:4px 0 12px}
+.rename-dialog [role=status]:empty{display:none}
+.rename-actions{display:flex;justify-content:flex-end;gap:8px}
+.rename-actions button{border:1px solid var(--edge);border-radius:8px;padding:6px 12px}
+.rename-actions button:last-child{background:var(--text);color:var(--bg)}

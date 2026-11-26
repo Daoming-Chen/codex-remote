@@ -1896,7 +1896,7 @@ function closeDialog(){
 function modal(title,anchor=null){
   closeDialog();
   const dialog=$('dialog');
-  dialog.classList.remove('chat-search','model-menu','model-command-menu','context-menu','header-menu','image-viewer','composer-menu','inline-menu','sidebar-menu-above');
+  dialog.classList.remove('chat-search','model-menu','model-command-menu','context-menu','header-menu','image-viewer','composer-menu','inline-menu','sidebar-menu-above','rename-dialog');
   $('dialog-title').textContent=title;
   const body=$('dialog-body');body.onkeydown=null;body.replaceChildren();
   if(anchor?.getClientRects().length){
@@ -2279,7 +2279,7 @@ function options(c,anchor=null){const body=modal('聊天选项',anchor);if(ancho
     });body.append(mark)
   }
   if(c.thread&&!c.pending&&c.messages?.length)body.append(row('从此对话创建分支','square-pen',()=>forkChat(c)));
-  body.append(row('重命名','pencil',()=>renameChat(c,anchor)));
+  body.append(row('重命名','pencil',()=>renameChat(c)));
   if(c.messages?.length)body.append(row('导出 Markdown','download',()=>downloadTranscript(c)))
 }
 function downloadTranscript(c){
@@ -4505,13 +4505,16 @@ function usageView(){
   renderContextUsage(u)
 }
 
-function renameChat(c,anchor=null){
-  const body=modal('重命名聊天',anchor),field=element('input','field'),status=element('p','quiet');
-  if(menuAnchor){if(anchor.closest('.history-row'))positionSidebarMenu(anchor);else anchorHeaderMenu(anchor)}
-  field.value=c.title;field.maxLength=120;field.setAttribute('aria-label','聊天名称');
-  const submit=row('保存','check',async()=>{
+function renameChat(c){
+  const body=modal('重命名聊天'),field=element('input','field'),status=element('p','quiet');
+  $('dialog').classList.add('rename-dialog');
+  const cancel=element('button','','取消'),actions=element('div','rename-actions');
+  cancel.type='button';cancel.onclick=closeDialog;
+  field.value=c.title;field.maxLength=120;field.placeholder='添加标题…';field.setAttribute('aria-label','聊天名称');
+  const submit=element('button','','保存');submit.type='button';
+  submit.onclick=async()=>{
     const name=field.value.trim();if(!name||submit.disabled)return;
-    submit.disabled=true;field.disabled=true;
+    submit.disabled=true;field.disabled=true;cancel.disabled=true;
     try{
       if(c.thread){
         status.textContent=('正在同步到 '+receiverName+'…');
@@ -4521,10 +4524,12 @@ function renameChat(c,anchor=null){
       }else if(c.parent||c.pending){throw Error('请从“主机会话”打开此任务后重命名。')}
       else{c.title=name}
       save();renderSidebarHistory();if(body.contains(field))closeDialog();if(current()===c)messages(false)
-    }catch(e){status.textContent=e.message;submit.disabled=false;field.disabled=false}
-  });
+    }catch(e){status.textContent=e.message;submit.disabled=false;field.disabled=false;cancel.disabled=false}
+  };
   field.onkeydown=e=>{if(e.key==='Enter'&&!isCompositionKey(e))submit.click()};
-  status.setAttribute('role','status');body.append(field,submit,status);field.focus();field.select()
+  status.setAttribute('role','status');actions.append(cancel,submit);
+  body.append(element('p','quiet','标题简短一些，方便辨认。'),field,status,actions);
+  field.oninput=()=>{submit.disabled=!field.value.trim()};field.oninput();field.focus();field.select()
 }
 
 const loadedVersion=document.querySelector('meta[name="client-version"]')?.content;
