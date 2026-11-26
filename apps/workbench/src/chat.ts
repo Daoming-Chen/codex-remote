@@ -4281,7 +4281,7 @@ async function modelPicker(force=false,openList=false){
       const fromList=panel.getAttribute('role')==='menu'&&!openList;
       const height=startingHeight(fromList);
       if(fromList)for(const animation of panel.getAnimations())animation.cancel();
-      panel.removeAttribute('role');panel.removeAttribute('aria-label');panel.onkeydown=null;panel.replaceChildren();status.textContent='';
+      panel.removeAttribute('role');panel.removeAttribute('aria-label');panel.onkeydown=null;WorkbenchComponents.clearModelOptions(panel);panel.replaceChildren();status.textContent='';
       const toggle=btn('选择模型','chevron-down',list,'modal-row model-view-toggle');
       const name=element('span','model-view-name',model?.name||composerModel(c).model||'默认');
       const effort=element('span','model-view-effort');
@@ -4328,35 +4328,18 @@ async function modelPicker(force=false,openList=false){
       $('model-picker').dataset.view='list';
       const fromSlider=!!panel.querySelector('.model-view-header')&&!openList;
       const height=startingHeight(fromSlider);
-      panel.replaceChildren();status.textContent='选择模型';
+      WorkbenchComponents.clearModelOptions(panel);panel.replaceChildren();status.textContent='选择模型';
       const config=composerModel(c),selected=config.model,defaults=projectDefaults?.defaults;
       const matchesDefault=!!defaults?.model&&selected===defaults.model&&!explicitlySelected(selected);
       panel.setAttribute('role','menu');panel.setAttribute('aria-label','选择模型');
-      function option(name,run,checked,description,retirementAt){
-        const button=element('button','modal-row');button.type='button';button.setAttribute('aria-label',name);
-        button.onclick=()=>{
-          if(!checked){run();return}
-          finishChoice(data.models.find(model=>model.id===selected))
-        };
-        const label=element('span','model-option-label');
-        const title=element('span','model-option-name',name);
-        title.title=name;label.append(title);
-        button.append(label);if(checked&&!openList)button.append(icon('check'));
-        const end=Number.isSafeInteger(retirementAt)?new Date(retirementAt*1000):null;
-        const retirement=end&&Number.isFinite(end.getTime())?'将于'+end.toLocaleDateString('zh-CN',{month:'long',day:'numeric',timeZone:'UTC'})+'下线':'';
-        if(retirement||description){
-          label.append(element('span','model-default-description',retirement||description));
-          button.setAttribute('aria-description',[retirement,description].filter(Boolean).join(' · '));
-          if(retirement&&description)button.title=description
-        }
-        button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(checked));
-        panel.append(button);return button
+      const options=[];
+      const keepModel=()=>finishChoice(data.models.find(model=>model.id===selected));
+      if(!openList){
+        const restore=!matchesDefault||config.effort!==defaults?.effort||c.speedChoice;
+        options.push({key:'default',name:'默认',projectDefault:true,checked:matchesDefault,disabled:stale||!defaults?.model,
+          description:defaults?.model?'项目默认 · '+(data.models.find(m=>m.id===defaults.model)?.name||defaults.model):'',
+          select:restore?resetToDefault:keepModel})
       }
-      const defaultDescription=defaults?.model?'项目默认 · '+(data.models.find(m=>m.id===defaults.model)?.name||defaults.model):'';
-      const reset=option('默认',resetToDefault,matchesDefault,defaultDescription);
-      reset.dataset.projectDefault='';
-      if(matchesDefault&&(config.effort!==defaults?.effort||c.speedChoice))reset.onclick=resetToDefault;
-      reset.disabled=stale||!defaults?.model;
       function choose(model,effort,tier){
         if(tier)c.speedChoice={model:model.id,id:tier};else delete c.speedChoice;
         c.effort=effort;c.pickerChoice={mode:'model',model:model.id};
@@ -4364,28 +4347,26 @@ async function modelPicker(force=false,openList=false){
         rememberConfiguration();save();modelLabel(c);finishChoice(model)
       }
       if(openList){
-        reset.remove();
         const active=activeConfiguration();
         const history=[...recentConfigurations(),...(data.recentConfigurations||[])];
         const choices=recentModelChoices(data.models,history,active,nativePermissionMode);
         for(const [index,{model,configuration:cfg}] of choices.entries()){
           const tierName=cfg.tier==='default'?'标准':model.serviceTiers?.find(t=>t.id===cfg.tier)?.name;
           const description=effortName(cfg.effort);
-          const item=option(model.name,()=>choose(model,cfg.effort,cfg.tier),sameConfiguration(cfg,active),description);
-          item.dataset.recent='';item.prepend(element('kbd','recent-key',String(index+1)));
-          if(tierName){
-            item.append(element('small','recent-tier',tierName));
-            item.setAttribute('aria-description',[description,tierName].filter(Boolean).join(' · '))
-          }
+          const checked=sameConfiguration(cfg,active);
+          options.push({key:'recent:'+index,name:model.name,shortcut:index+1,tier:tierName,description,checked,
+            select:checked?keepModel:()=>choose(model,cfg.effort,cfg.tier)})
         }
       }
       for(const model of data.models){
-        const item=option(model.name,()=>{
-          const active=activeConfiguration();
-          choose(model,effortOnModelChange(model,active.effort),active.model===model.id?active.tier:null)
-        },!matchesDefault&&model.id===selected,model.description,model.retirementAt);
-        item.dataset.modelId=model.id
+        const checked=!matchesDefault&&model.id===selected;
+        options.push({key:'model:'+model.id,modelId:model.id,name:model.name,description:model.description,
+          retirementAt:model.retirementAt,checked,select:checked?keepModel:()=>{
+            const active=activeConfiguration();
+            choose(model,effortOnModelChange(model,active.effort),active.model===model.id?active.tier:null)
+          }})
       }
+      WorkbenchComponents.renderModelOptions(panel,options,openList);
       const visibleOptions=()=>Array.from(panel.querySelectorAll('button:enabled:not([hidden])'));
       const enabled=visibleOptions();
       let search;

@@ -18,7 +18,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
       ] } });
       if (path.endsWith('/api/models')) return route.fulfill({ json: {
         models: ['alpha', 'bravo', 'charlie', 'delta'].map(id => ({
-          id, serviceTiers: [{id: 'fast', name: '快速'}], name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
+          id, retirementAt: id === 'bravo' ? 1893456000 : undefined, description: '主机模型说明', serviceTiers: [{id: 'fast', name: '快速'}], name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
         })),
         defaults: { model: 'alpha', effort: 'low' },
       } });
@@ -50,6 +50,16 @@ test('select an authorized host, preview and remove attachments, retain the draf
     assert.equal(await page.locator('[data-recent]:visible').first().getAttribute('aria-label'), 'Model delta');
     await modelSearch.press('Escape');
     await page.locator('#model-picker').click();
+    await page.locator('.model-view-toggle').click();
+    const retiring = page.getByRole('menuitemradio', {name: 'Model bravo'});
+    assert.equal(await retiring.locator('.model-default-description').innerText(), '将于1月1日下线');
+    assert.match(await retiring.getAttribute('aria-description') || '', /下线 · 主机模型说明/);
+    assert.equal(await page.getByRole('menuitemradio', {name: 'Model delta'}).getAttribute('aria-checked'), 'true');
+    await retiring.click();
+    assert.match(await page.locator('.model-view-name').innerText(), /bravo/);
+    await page.locator('.model-view-toggle').click();
+    await page.getByRole('menuitemradio', {name: '默认',exact: true}).click();
+    assert.match(await page.locator('.model-view-name').innerText(), /alpha/);
     const speed = page.locator('.speed-trigger');
     await speed.press('ArrowDown');
     await page.keyboard.press('End');
