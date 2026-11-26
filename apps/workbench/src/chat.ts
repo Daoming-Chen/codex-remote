@@ -3666,14 +3666,6 @@ $('steer').onclick=()=>steer(current());
 $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}if(c.pending||c.activeTurn){await steer(c);return}if(readingFiles.has(c)||(!text&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const prompt=promptWithFiles(text,files);if(new TextEncoder().encode(prompt).length>16000){toast('单条消息最多 16 KB');return}
-  const openingFocus=document.activeElement;
-  function focusPermission(){
-    enableMenuNavigation(body);
-    if(document.activeElement===openingFocus){
-      const choice=body.querySelector('[aria-pressed=true]')||body.querySelector('button');
-      choice?.focus({preventScroll:true})
-    }
-  }
   let native;
   try{native=await nativePermissions()}catch(error){toast(error.message);return}
   if(current()!==c||c.pending||c.activeTurn||c.archived||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
@@ -4469,12 +4461,11 @@ async function modelPicker(force=false,openList=false){
   }
 }
 
-const permissionNames=new Map([['read-only','只读'],['workspace-write','工作区写入'],['danger-full-access','完全访问']]);
 function supportsNativePermission(c){
   return c.sandbox==='remote-workspace'||c.sandbox==='danger-full-access'&&c.approvalPolicy!=='untrusted'
 }
 function updatePermissionLabel(c){
-  const next=nativePermissionMode&&!supportsNativePermission(c)?'选择任务权限':c.sandbox==='remote-workspace'?'工作区写入（按需审批）':permissionNames.get(c.sandbox)||'只读';
+  const next=nativePermissionMode&&!supportsNativePermission(c)?'选择任务权限':WorkbenchComponents.permissionLabel(c.sandbox);
   const running=!!(c.pending||c.activeTurn),label=$('sandbox-label');
   const visible=running?'下轮 · '+next:next;
   label.classList.toggle('full-access',c.sandbox==='danger-full-access');
@@ -4515,31 +4506,21 @@ async function permissionView(beforeSend=false){
   }
   if(!body.contains(loading)||!$('dialog').open||current()!==c)return;
   loading.remove();
-  if(native){
-    if(beforeSend)body.append(element('p','quiet','请为这台主机选择任务权限，再发送草稿。'));
-    for(const [mode,label] of [['remote-workspace','工作区写入（按需审批）'],['danger-full-access','完全访问']]){
-      const checked=selected===mode&&(mode==='remote-workspace'||c.approvalPolicy!=='untrusted');
-      const pick=row(label,'shield',()=>{
-        c.sandbox=mode;c.approvalPolicy='never';save();closeDialog();composer()
-      },checked?'✓':'');
-      pick.setAttribute('aria-pressed',String(checked));body.append(pick)
-    }
-    focusPermission();return
-  }
-  for(const [mode,label] of permissionNames){
-    const pick=row(label,'shield',async()=>{
-      if(mode==='danger-full-access'){
+  const ask=c.approvalPolicy==='untrusted';
+  WorkbenchComponents.renderPermissionChoices(body,{native,selected,ask,beforeSend,
+    async select(mode){
+      if(!native&&mode==='danger-full-access'){
         try{
           const response=await deviceFetch('/api/capabilities');
           if(!response.ok||!(await response.json()).fullAccess)throw Error('当前接收端版本不支持完全访问');
         }catch(e){if(body.contains(activeReport)&&$('dialog').open)toast(e.message);return}
         if(current()!==c||!$('dialog').open||!body.contains(activeReport))return;
       }
+      if(native)c.approvalPolicy='never';
       c.sandbox=mode;save();closeDialog();composer()
-    },selected===mode?'✓':'');
-    pick.setAttribute('aria-pressed',String(selected===mode));body.append(pick)
-  }
-  const ask=c.approvalPolicy==='untrusted';
+    }
+  });
+  if(native){focusPermission();return}
   body.append(row('命令与文件审批','shield',async()=>{
     try{
       const r=await deviceFetch('/api/capabilities');

@@ -21,3 +21,4 @@ export { renderModelSearch } from './models/ModelSearch.js';
 export { renderEffortControl } from './models/EffortControl.js';
 export { renderSpeedMenu } from './models/SpeedMenu.js';
 export { renderModelOptions, clearModelOptions } from './models/ModelOptions.js';
+export { permissionLabel, renderPermissionChoices } from './PermissionChoices.js';

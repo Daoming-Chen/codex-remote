@@ -11,8 +11,10 @@ test('select an authorized host, preview and remove attachments, retain the draf
     const page = await browser.newPage({ serviceWorkers: 'block' });
     const scope = 'a'.repeat(64);
     const host = { name: '同名主机', deviceId: 'first', scope, online: true };
+    let turnRequests = 0;
     await page.route('http://localhost:49002/**', async route => {
       const path = new URL(route.request().url()).pathname;
+      if (path.endsWith('/api/turn')) turnRequests++;
       if (path === '/api/devices') return route.fulfill({ json: { devices: [
         host, { ...host, deviceId: 'second', scope: 'b'.repeat(64), online: false },
       ] } });
@@ -91,6 +93,11 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.locator('.effort-usage-reminder').waitFor({state: 'hidden'});
     await effort.press('Enter');
     await draft.fill('保留这份草稿');
+    await page.getByRole('button', {name: '查看任务权限'}).click();
+    await page.getByRole('button', {name: '工作区写入', exact: true}).click();
+    assert.equal(await page.locator('#sandbox-label').innerText(), '工作区写入');
+    assert.equal(await draft.inputValue(), '保留这份草稿');
+    assert.equal(turnRequests, 0);
     await page.locator('#file').setInputFiles({ name: 'demo.png', mimeType: 'image/png',
       buffer: await readFile(new URL('../web/codex.png', import.meta.url)) });
     await page.getByRole('button', { name: '查看demo.png' }).click();
