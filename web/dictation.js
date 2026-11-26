@@ -95,19 +95,19 @@
       if(window.ReceiverKeyboard)prompt.setSelectionRange(start+text.length,start+text.length);
       if(!prompt.hasAttribute('data-android-ime'))prompt.focus()
   }
-  function unavailableDictation(message){
-    if(window.ReceiverKeyboard?.usesDoubaoKeyboard?.())
-      return Error('当前使用豆包输入法。请点输入框，在豆包键盘上启动语音。');
-    return Error(message)
-  }
   async function browserDictation(s){
     const Engine=window.SpeechRecognition||window.webkitSpeechRecognition;
+    const keyboardHint=window.ReceiverKeyboard?.usesDoubaoKeyboard?.()
+      ?'当前使用豆包输入法。请点输入框，在豆包键盘上启动语音。':null;
     if(!Engine||!('processLocally' in Engine.prototype)||typeof Engine.available!=='function')
-      throw unavailableDictation('此浏览器未提供离线中文听写，可使用键盘语音输入');
+      throw Error(keyboardHint||'此浏览器未提供离线中文听写，可使用键盘语音输入');
     const options={langs:['zh-CN'],processLocally:true,quality:'dictation'};
-    const state=await Engine.available(options);
+    let state;
+    try{state=await Engine.available(options)}
+    catch(error){if(active!==s)return;throw Error(keyboardHint||error.message)}
     if(active!==s)return;
     if(state!=='available'){
+      if(keyboardHint)throw Error(keyboardHint);
       if(state==='downloadable'&&typeof Engine.install==='function'){
         const panel=modal('中文听写语言包');
         panel.append(element('p','quiet','设备需要中文语言包才能离线听写。'));
@@ -119,7 +119,7 @@
         reset(s);return
       }
       if(state==='downloading')throw Error('中文语言包正在下载');
-      throw unavailableDictation('此设备暂不支持离线中文听写')
+      throw Error('此设备暂不支持离线中文听写')
     }
     const recognition=s.recognition=new Engine();
     recognition.lang='zh-CN';recognition.processLocally=true;recognition.continuous=true;
