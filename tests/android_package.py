@@ -23,7 +23,13 @@ export async function authorizeReceiver({onScanUrl}){
 }
 export async function* remoteLines(){throw Error('offline fixture')}
 export function bindReceiverDevice(){}
-export async function listReceiverDevices(){await requireReceiverIdentity();return []}
+const directoryFailures=[{code:'REMOTE_NOT_PAIRED'},{code:'AUTH_INVALID'},{code:'PEER_IDENTITY_MISMATCH'},
+ {code:'CONNECTION_FAILED',reason:'timeout'},{code:'SERVER_CREDENTIALS_LOCK_UNSUPPORTED'},{code:'UNEXPECTED'}];
+export async function listReceiverDevices(){
+ const failure=directoryFailures.shift();
+ if(failure)throw Object.assign(Error('private upstream detail'),failure);
+ return []
+}
 export async function requireReceiverIdentity(){throw Object.assign(Error('offline fixture'),{code:'REMOTE_NOT_PAIRED'})}
 """)
   child=subprocess.Popen([os.environ.get('TEST_NODE','node'),str(app/'embedded.mjs')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
@@ -61,6 +67,13 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
    except urllib.error.HTTPError as error:
     assert error.code==503
     assert json.load(error)=={'code':'REMOTE_NOT_PAIRED','error':'完成应用内的 Remote 设备授权后，即可选择主机。'}
+   for code in ['AUTH_INVALID','PEER_IDENTITY_MISMATCH','DIRECTORY_TIMEOUT','SERVER_CREDENTIALS_LOCK_UNSUPPORTED','DEVICE_DIRECTORY_FAILED']:
+    try:urllib.request.urlopen(request);raise AssertionError('failed directory accepted')
+    except urllib.error.HTTPError as error:
+     result=json.load(error)
+     assert error.code==503 and result['code']==code,result
+     assert 'private upstream detail' not in result['error']
+   assert json.load(urllib.request.urlopen(request))=={'devices':[]}
    for endpoint in ('api/client-version','chat.js'):
     try:urllib.request.urlopen(url+endpoint);raise AssertionError('missing cookie accepted')
     except urllib.error.HTTPError as e:assert e.code==403

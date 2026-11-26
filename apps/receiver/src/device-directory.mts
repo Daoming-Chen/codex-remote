@@ -8,6 +8,26 @@ export function deviceNameEvent(name: string): string {
   return 'event: device-name\ndata: ' + JSON.stringify(name || '所选设备') + '\n\n';
 }
 
+const directoryErrors = new Map([
+  ['ACCOUNT_AUTH_REQUIRED', 'Remote 要求重新授权此接收端。'],
+  ['AUTH_INVALID', 'Remote 已拒绝此接收端的授权。请检查账号的设备授权状态。'],
+  ['TOKEN_EXPIRED', 'Remote 授权已过期。请检查账号的设备授权状态。'],
+  ['PEER_IDENTITY_MISMATCH', '主机身份与 Remote 授权记录不一致。请在 Remote 中核对主机。'],
+  ['SERVER_CREDENTIALS_LOCK_UNSUPPORTED', '接收端无法锁定授权凭据。请检查接收端版本和存储位置。'],
+  ['SERVER_CREDENTIALS_BUSY', '接收端正在更新授权凭据。请稍后刷新设备。'],
+  ['CONNECTION_FAILED', '无法从 Remote 服务获取设备列表。请检查连接后刷新设备。'],
+  ['DIRECTORY_TIMEOUT', '读取 Remote 设备列表超时。请刷新设备。'],
+  ['INVALID_MESSAGE', 'Remote 返回的设备或授权信息格式异常。'],
+]);
+
+export function deviceDirectoryError(error: {code?: unknown; name?: unknown; reason?: unknown} | null) {
+  const timeout = error?.name === 'TimeoutError' || (error?.code === 'CONNECTION_FAILED' && error.reason === 'timeout');
+  const code = timeout ? 'DIRECTORY_TIMEOUT' : typeof error?.code === 'string' ? error.code : '';
+  const message = directoryErrors.get(code);
+  return message ? {code, error: message + '（' + code + '）'} :
+    {code: 'DEVICE_DIRECTORY_FAILED', error: '读取 Remote 设备列表失败，请刷新设备。'};
+}
+
 export function createDeviceDirectory(discover: () => Promise<Host[]>) {
   const devices = new Map<string, RemoteDevice>();
   const subscribers = new Map<string, Map<ServerResponse, boolean>>();
