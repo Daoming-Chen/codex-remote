@@ -15,3 +15,6 @@ function WelcomeTitle({ project, cwd, hasGitRoot }: WelcomeProps) {
 export function renderWelcome(container: HTMLElement, props: WelcomeProps) {
   render(<WelcomeTitle {...props} />, container);
 }
+
+export { sameConfiguration, recentModelChoices } from './models/configurations.js';
+export { renderModelSearch } from './models/ModelSearch.js';

@@ -16,6 +16,12 @@ test('select an authorized host, preview and remove attachments, retain the draf
       if (path === '/api/devices') return route.fulfill({ json: { devices: [
         host, { ...host, deviceId: 'second', scope: 'b'.repeat(64), online: false },
       ] } });
+      if (path.endsWith('/api/models')) return route.fulfill({ json: {
+        models: ['alpha', 'bravo', 'charlie', 'delta'].map(id => ({
+          id, name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low'], defaultEffort: 'low',
+        })),
+        defaults: { model: 'alpha', effort: 'low' },
+      } });
       if (path.includes('/api/')) return route.fulfill({ json: { items: [], models: [], projects: [] } });
       const file = path === '/' ? 'devices.html' : path === '/devices/' + scope + '/' ? 'index.html' : path.slice(1);
       await route.fulfill({ path: fileURLToPath(new URL('../web/' + file, import.meta.url)) });
@@ -27,6 +33,22 @@ test('select an authorized host, preview and remove attachments, retain the draf
     assert.equal(await page.evaluate(() => localStorage.getItem('codex-receiver-selected-device')), 'first');
     assert.equal(await page.locator('#home-title').innerText(), '我们要构建什么？');
     const draft = page.locator('#prompt');
+    await draft.fill('/model');
+    await draft.press('Enter');
+    const modelSearch = page.getByRole('textbox', { name: '搜索模型' });
+    await modelSearch.waitFor();
+    assert.equal(await page.locator('[data-recent]:visible').count(), 3);
+    await modelSearch.fill('DELTA model');
+    const matches = page.getByRole('menuitemradio');
+    assert.equal(await matches.count(), 1);
+    assert.equal(await matches.first().getAttribute('data-model-id'), 'delta');
+    await modelSearch.press('Enter');
+    assert.match(await page.locator('#model-label').innerText(), /delta/);
+    await draft.fill('/model');
+    await draft.press('Enter');
+    await modelSearch.waitFor();
+    assert.equal(await page.locator('[data-recent]:visible').first().getAttribute('aria-label'), 'Model delta');
+    await modelSearch.press('Escape');
     await draft.fill('保留这份草稿');
     await page.locator('#file').setInputFiles({ name: 'demo.png', mimeType: 'image/png',
       buffer: await readFile(new URL('../web/codex.png', import.meta.url)) });

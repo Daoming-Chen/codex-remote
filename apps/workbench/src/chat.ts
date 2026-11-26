@@ -4239,7 +4239,7 @@ async function modelPicker(force=false,openList=false){
     function recentConfigurations(){
       try{const rows=JSON.parse(chatStorage.getItem(recentKey)||'[]');return Array.isArray(rows)?rows.filter(row=>typeof row?.model==='string'):[]}catch{return []}
     }
-    function sameConfiguration(a,b){return a.model===b.model&&a.effort===b.effort&&a.tier===b.tier}
+    const {sameConfiguration,recentModelChoices}=WorkbenchComponents;
     function rememberConfiguration(){
       const active=activeConfiguration();
       const recent=recentConfigurations().filter(item=>!sameConfiguration(item,active));
@@ -4417,23 +4417,18 @@ async function modelPicker(force=false,openList=false){
       }
       if(openList){
         reset.remove();
-        const active=activeConfiguration(),shown=[];
-        const fallback=data.models.filter(m=>m.id!==active.model).map(m=>({model:m.id,effort:m.defaultEffort,tier:null}));
-        for(const cfg of [...recentConfigurations(),...(data.recentConfigurations||[]),active,...fallback]){
-          const model=data.models.find(m=>m.id===cfg.model);
-          if(!model||(nativePermissionMode&&cfg.tier)||(cfg.effort&&!model.efforts.includes(cfg.effort))||
-             (cfg.tier&&cfg.tier!=='default'&&!model.serviceTiers?.some(t=>t.id===cfg.tier))||
-             shown.some(other=>sameConfiguration(other,cfg)))continue;
-          shown.push(cfg);
+        const active=activeConfiguration();
+        const history=[...recentConfigurations(),...(data.recentConfigurations||[])];
+        const choices=recentModelChoices(data.models,history,active,nativePermissionMode);
+        for(const [index,{model,configuration:cfg}] of choices.entries()){
           const tierName=cfg.tier==='default'?'标准':model.serviceTiers?.find(t=>t.id===cfg.tier)?.name;
           const description=effortName(cfg.effort);
           const item=option(model.name,()=>choose(model,cfg.effort,cfg.tier),sameConfiguration(cfg,active),description);
-          item.dataset.recent='';item.prepend(element('kbd','recent-key',String(shown.length)));
+          item.dataset.recent='';item.prepend(element('kbd','recent-key',String(index+1)));
           if(tierName){
             item.append(element('small','recent-tier',tierName));
             item.setAttribute('aria-description',[description,tierName].filter(Boolean).join(' · '))
           }
-          if(shown.length===3)break
         }
       }
       for(const model of data.models){
@@ -4447,21 +4442,7 @@ async function modelPicker(force=false,openList=false){
       const enabled=visibleOptions();
       let search;
       if(openList){
-        search=element('input','model-command-search');search.type='text';
-        search.placeholder='搜索模型';search.setAttribute('aria-label','搜索模型');
-        const summary=element('span','model-command-summary');summary.setAttribute('role','status');
-        status.replaceChildren(search,summary);
-        search.oninput=()=>{
-          const terms=search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-          let count=0;
-          for(const row of panel.children){
-            const label=[row.getAttribute('aria-label'),row.dataset.modelId||''].join(' ').toLowerCase();
-            row.hidden=terms.length?row.hasAttribute('data-recent')||!terms.every(term=>label.includes(term)):!row.hasAttribute('data-recent');
-            if(!row.hidden)count++
-          }
-          summary.textContent=terms.length?(count?'匹配的模型':'没有匹配的模型'):'最近使用的模型'
-        };
-        search.onkeydown=e=>{
+        search=WorkbenchComponents.renderModelSearch(status,panel,e=>{
           if(isCompositionKey(e))return;
           const rows=visibleOptions();
           if(!search.value&&!e.repeat&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&/^[1-3]$/.test(e.key)){
@@ -4472,8 +4453,8 @@ async function modelPicker(force=false,openList=false){
             e.preventDefault();const row=e.key==='ArrowUp'?rows.at(-1):rows[0];
             if(e.key==='Enter')row?.click();else row?.focus()
           }
-        };
-        search.oninput();search.focus()
+        });
+        search.focus()
       }else {
         (enabled.find(item=>item.getAttribute('aria-checked')==='true')||enabled[0])?.focus();
         if(fromSlider)animateViewEntry(panel,10,40);
