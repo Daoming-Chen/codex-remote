@@ -12,6 +12,7 @@ export {directory as receiverIdentityDirectory};
 let connection;
 let boundDeviceId;
 let lastDisconnect=null;
+export function getLastDisconnect(){return lastDisconnect}
 export function bindReceiverDevice(deviceId){
   if(typeof deviceId!=='string'||!deviceId)throw Error('缺少 Remote 设备 ID');
   if(boundDeviceId===deviceId)return;

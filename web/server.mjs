@@ -6,7 +6,7 @@ const moduleUrl=new URL(import.meta.url);
 const deviceId=moduleUrl.searchParams.get('device')||process.env.CODEX_RECEIVER_DEVICE_ID;
 const transportUrl=new URL('./transport.mjs',import.meta.url);
 if(deviceId)transportUrl.searchParams.set('device',deviceId);
-const {openRemote,remoteLines,requireReceiverIdentity,listReceiverDevices,bindReceiverDevice}=await import(transportUrl.href);
+const {openRemote,getLastDisconnect,remoteLines,requireReceiverIdentity,listReceiverDevices,bindReceiverDevice}=await import(transportUrl.href);
 
 
 import {createHash,randomUUID} from 'node:crypto';
@@ -1337,9 +1337,9 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       return json(200,await remoteThreads('project-files',JSON.stringify({root,query:query.trim()})))
     }
     if(req.method==='POST'&&req.url==='/api/connection'){
+      if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const ctx=deviceId&&await openRemote();
       if(ctx?.nativeCall)return json(200,{host:deviceName,checkedAt:Date.now(),mode:ctx.transportMode(),lastDisconnect:ctx.lastDisconnect?.(),nativeCodex:true,appServerReady:true});
-      if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const path=await runtimeDriver();
       let mode,nativeCodex;
       const probe='if result=$(timeout 20 python3 '+path+' --health 2>/dev/null); then printf "%s\\n" "$result"; else echo \'{"ready":false}\'; fi';
@@ -1701,9 +1701,10 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     json(404,{error:'未找到'})
   }catch(e){
-    if(['REMOTE_NOT_PAIRED','REMOTE_HOST_ABSENT','REMOTE_HOST_OFFLINE'].includes(e.code))return json(503,{code:e.code,error:e.message});
+    const diagnostic=deviceId&&req.method==='POST'&&req.url==='/api/connection'?getLastDisconnect?.():null;
+    if(['REMOTE_NOT_PAIRED','REMOTE_HOST_ABSENT','REMOTE_HOST_OFFLINE'].includes(e.code))return json(503,{code:e.code,error:e.message,...(diagnostic&&e.code==='REMOTE_HOST_OFFLINE'?{lastDisconnect:diagnostic}:{})});
     if(/TRANSPORT|CONNECT|TIMEOUT|fetch failed|Control socket|timed out/i.test([e.code,e.message,e.cause?.code].join(' ')))
-      return json(503,{error:'ds-harness-remote 连接未就绪，请重试'});
+      return json(503,{error:'ds-harness-remote 连接未就绪，请重试',...(diagnostic?{lastDisconnect:diagnostic}:{})});
     json(400,{error:e.code==='ENOENT'?'无法找到这轮对话':'请求处理失败'})
   }
 }
