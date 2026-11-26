@@ -41,23 +41,25 @@ Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打�
 
 ## 构建 Android 测试包
 
-当前打包脚本使用 Windows。先构建 Web 包，然后准备 Python 3、Node、JDK 17、Android SDK Platform 35、Build Tools 35、NDK r24 和解压后的 Node.js Mobile Android 18.20.4。设置以下环境变量。
+支持 Windows 和 x86_64 Linux。先构建 Web 包，然后准备 Python 3、Node、JDK 17、Android SDK Platform 35、Build Tools 35、NDK r24 和解压后的 Node.js Mobile Android 18.20.4。设置以下环境变量。
 
 | 环境变量 | 指向 |
 | --- | --- |
 | `JAVA_HOME` | JDK 根目录 |
 | `ANDROID_BUILD_TOOLS` | 含 aapt2、d8、zipalign、apksigner 的目录 |
 | `ANDROID_PLATFORM_JAR` | Platform 35 的 android.jar 文件 |
-| `ANDROID_NDK_HOME` | Windows 版 NDK r24 根目录 |
+| `ANDROID_NDK_HOME` | 与构建机器系统匹配的 NDK r24 根目录 |
 | `NODE_MOBILE_ANDROID` | 含 bin/arm64-v8a/libnode.so 和 bin/x86_64/libnode.so 的目录 |
 
-首次构建会在 android/build/local-test.jks 创建测试签名。要覆盖安装先前交付的测试版，可通过 CODEX_REMOTE_TEST_KEYSTORE 指向原构建脚本生成的测试密钥文件。保留该文件在本机。
+下列命令使用 Linux 的 `python3`。Windows 可用 `python`。首次构建会在 android/build/local-test.jks 创建测试签名。要覆盖安装先前交付的测试版，可通过 CODEX_REMOTE_TEST_KEYSTORE 指向原构建脚本生成的测试密钥文件。保留该文件在本机。
 
 ```sh
 npm ci --prefix android
-python android/build_native.py
-python android/build.py
-python tests/android_package.py
+npm run build
+python3 scripts/package_web.py
+python3 android/build_native.py
+python3 android/build.py
+python3 tests/android_package.py
 ```
 
 产物为 `dist/Codex-Remote-Android-test.apk`，支持 arm64-v8a 和 x86_64。首次构建在本机生成测试签名。可设置 `TEST_NODE` 为 Node 18 可执行文件路径来运行包测试。

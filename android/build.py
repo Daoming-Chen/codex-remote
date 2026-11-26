@@ -10,6 +10,9 @@ node_dist=Path(os.environ['NODE_MOBILE_ANDROID'])
 assets_dir=a/'assets'
 assets_dir.mkdir(exist_ok=True)
 env=os.environ.copy()
+def tool(directory, name, windows_suffix=".exe"):
+ return directory/(name+windows_suffix if os.name=="nt" else name)
+
 def run(*args):subprocess.run([str(v) for v in args],check=True,env=env)
 build=a/'build'; build.mkdir(exist_ok=True);classes=build/'classes';classes.mkdir(exist_ok=True)
 with zipfile.ZipFile(out_dir/'Codex-Remote-Web.zip') as source,zipfile.ZipFile(a/'assets/receiver.zip','w',zipfile.ZIP_DEFLATED) as assets:
@@ -51,26 +54,26 @@ const androidStrictUtf8={decode(bytes){
    data=s.encode()
   assets.writestr(name,data)
  assets.write(a/'embedded.mjs','embedded.mjs')
-run(jdk/'bin/javac.exe','-encoding','UTF-8','--release','8','-classpath',jar,'-d',classes,*list((a/'java').rglob('*.java')))
-run(jdk/'bin/jar.exe','cf',build/'classes.jar','-C',classes,'.')
-run(bt/'d8.bat','--lib',jar,'--min-api','26','--output',build,build/'classes.jar')
+run(tool(jdk/'bin','javac'),'-encoding','UTF-8','--release','8','-classpath',jar,'-d',classes,*list((a/'java').rglob('*.java')))
+run(tool(jdk/'bin','jar'),'cf',build/'classes.jar','-C',classes,'.')
+run(tool(bt,'d8','.bat'),'--lib',jar,'--min-api','26','--output',build,build/'classes.jar')
 raw=build/'unsigned.apk'
-run(bt/'aapt2.exe','link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',a/'assets','-o',raw)
+run(tool(bt,'aapt2'),'link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',a/'assets','-o',raw)
 with zipfile.ZipFile(raw,'a',zipfile.ZIP_DEFLATED) as apk:
  apk.write(build/'classes.dex','classes.dex')
  for abi in ['arm64-v8a','x86_64']:
   for lib in ['libnode.so','libreceiver.so','libc++_shared.so']:
    src=(node_dist/'bin' if lib=='libnode.so' else a/'native')/abi/lib
    apk.write(src,'lib/'+abi+'/'+lib)
-aligned=build/'aligned.apk';run(bt/'zipalign.exe','-f','4',raw,aligned)
+aligned=build/'aligned.apk';run(tool(bt,'zipalign'),'-f','4',raw,aligned)
 configured_key=os.environ.get('CODEX_REMOTE_TEST_KEYSTORE')
 ks=Path(configured_key).resolve() if configured_key else build/'local-test.jks'
 if configured_key and not ks.is_file():
  raise SystemExit('CODEX_REMOTE_TEST_KEYSTORE must name an existing local test keystore')
-if not ks.exists():run(jdk/'bin/keytool.exe','-genkeypair','-keystore',ks,'-storepass','android','-keypass','android','-alias','receiver','-keyalg','RSA','-validity','3650','-dname','CN=Codex Remote Local Test')
+if not ks.exists():run(tool(jdk/'bin','keytool'),'-genkeypair','-keystore',ks,'-storepass','android','-keypass','android','-alias','receiver','-keyalg','RSA','-validity','3650','-dname','CN=Codex Remote Local Test')
 out=out_dir/'Codex-Remote-Android-test.apk'
-run(bt/'apksigner.bat','sign','--ks',ks,'--ks-pass','pass:android','--out',out,aligned)
-run(bt/'apksigner.bat','verify','--verbose',out)
+run(tool(bt,'apksigner','.bat'),'sign','--ks',ks,'--ks-pass','pass:android','--out',out,aligned)
+run(tool(bt,'apksigner','.bat'),'verify','--verbose',out)
 out.with_suffix('.apk.idsig').unlink(missing_ok=True)
 print(out.stat().st_size)
 
