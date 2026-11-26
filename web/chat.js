@@ -1939,6 +1939,19 @@ function closeDialog(){
   if(dialog.open)dialog.close();
   $('attach-menu').setAttribute('aria-expanded','false')
 }
+function positionComposerPopup(){
+  const dialog=$('dialog');
+  if(!menuAnchor||!dialog.open)return;
+  const attachment=menuAnchor===$('attach-menu');
+  if(!attachment&&!dialog.classList.contains('composer-menu'))return;
+  const prefix=attachment?'--attach':'--composer';
+  const rect=menuAnchor.getBoundingClientRect();
+  dialog.style.setProperty(prefix+'-left',Math.max(8,Math.min(rect.left,innerWidth-dialog.offsetWidth-8))+'px');
+  dialog.style.setProperty(prefix+'-bottom',Math.max(8,innerHeight-rect.top+5)+'px')
+}
+window.addEventListener('resize',positionComposerPopup);
+window.visualViewport?.addEventListener('resize',positionComposerPopup);
+new ResizeObserver(positionComposerPopup).observe($('composer'));
 function modal(title,anchor=null){
   closeDialog();
   const dialog=$('dialog');
@@ -1948,9 +1961,6 @@ function modal(title,anchor=null){
   if(anchor?.getClientRects().length){
     menuAnchor=anchor;anchor.setAttribute('aria-expanded','true');
     dialog.classList.add('inline-menu');dialog.show();
-    const r=anchor.getBoundingClientRect();
-    dialog.style.setProperty('--composer-left',Math.max(8,Math.min(r.left,innerWidth-328))+'px');
-    dialog.style.setProperty('--composer-bottom',Math.max(8,innerHeight-r.top+5)+'px')
   }else dialog.showModal();
   return body
 }
@@ -2142,10 +2152,9 @@ function archives(){
   void load(null)
 }
 function attachmentMenu(){
-  const anchor=$('attach-menu'),rect=anchor.getBoundingClientRect(),body=modal('添加文件等内容',anchor),dialog=$('dialog');
+  const anchor=$('attach-menu'),body=modal('添加文件等内容',anchor),dialog=$('dialog');
   anchor.setAttribute('aria-expanded','true');dialog.classList.add('context-menu');
-  dialog.style.setProperty('--attach-left',Math.max(8,Math.min(rect.left,innerWidth-232))+'px');
-  dialog.style.setProperty('--attach-bottom',Math.max(8,innerHeight-rect.top+5)+'px');
+  positionComposerPopup();
   const menu=element('div');menu.setAttribute('role','menu');body.append(menu);
   function item(label,name,run){
     const button=row(label,name,run);button.setAttribute('role','menuitem');menu.append(button)
@@ -3882,7 +3891,9 @@ async function threadApi(args,signal){
 }
 async function remotePicker(projects){
   const body=modal(projects?'选择远程项目':(''+receiverName+' 的会话'),projects?document.querySelector('[data-action=project]'):null),panel=element('div','results'),status=element('p','quiet','正在读取 Codex 会话目录…');body.append(status,panel);
-  if(projects&&menuAnchor)$('dialog').classList.add('composer-menu');
+  if(projects&&menuAnchor){
+    $('dialog').classList.add('composer-menu');positionComposerPopup()
+  }
   const seen=new Set();
   const search=projects?element('input','field'):null;
   const empty=element('p','quiet','已加载的项目中没有匹配项。');
@@ -4561,7 +4572,9 @@ function updatePermissionLabel(c){
 }
 async function permissionView(beforeSend=false){
   const c=current(),body=modal('任务权限',document.querySelector('#composer [data-action=permissions]'));
-  if(menuAnchor)$('dialog').classList.add('composer-menu');
+  if(menuAnchor){
+    $('dialog').classList.add('composer-menu');positionComposerPopup()
+  }
   const activeReport=element('p','quiet');activeReport.id='active-turn-policy';activeReport.setAttribute('role','status');
   body.append(activeReport,element('div','preference-label','下一轮权限'));updatePermissionLabel(c);
   const selected=c.sandbox||'read-only';
