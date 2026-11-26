@@ -278,3 +278,51 @@ test('restore a streaming turn after sending on another device with the same thr
     assert.deepEqual(wrongHost, []);
   } finally { await browser.close() }
 });
+
+test('touch selection sends the model and effort shown by the tablet composer', async () => {
+  const browser = await chromium.launch(process.env.CHROMIUM_PATH
+    ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
+  try {
+    const page = await browser.newPage({hasTouch: true, isMobile: true, viewport: {width: 960, height: 720}, serviceWorkers: 'block'});
+    page.setDefaultTimeout(8000);
+    const directory = process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/', import.meta.url));
+    const scope = 'c'.repeat(64);
+    const origin = 'http://localhost:49005';
+    const base = '/devices/' + scope;
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === base + '/') {
+        const template = await readFile(directory + '/index.html', 'utf8');
+        return route.fulfill({contentType: 'text/html', body: renderWorkbenchPage(template, {
+          deviceName: '平板测试主机', scope, version: '0123456789abcdef', dictationEngine: 'browser',
+        })});
+      }
+      if (path === base + '/api/models') return route.fulfill({json: {
+        models: ['alpha', 'bravo'].map(id => ({id, name: id, isDefault: id === 'alpha',
+          efforts: ['low', 'medium', 'high'], defaultEffort: 'low'})), defaults: {model: 'alpha', effort: 'low'},
+      }});
+      if (path === base + '/api/native-capability') return route.fulfill({json: {native: false}});
+      if (path === base + '/api/turn') return route.fulfill({json: {id: route.request().postDataJSON().id}});
+      if (path.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: []}});
+      return route.fulfill({path: directory + path});
+    });
+    await page.goto(origin + base + '/');
+    await page.locator('#model-picker').tap();
+    await page.locator('.model-view-toggle').tap();
+    await page.getByRole('menuitemradio', {name: 'bravo', exact: true}).tap();
+    const slider = page.getByRole('slider', {name: '强度'});
+    const box = await slider.boundingBox();
+    assert(box);
+    await slider.tap({position: {x: box.width - 6, y: box.height / 2}});
+    assert.equal(await slider.inputValue(), '2');
+    await page.touchscreen.tap(5, 5);
+    await page.locator('#dialog').waitFor({state: 'hidden'});
+    assert.equal(await page.locator('.model-trigger-name').innerText(), 'bravo');
+    assert.equal((await page.locator('.model-strength').innerText()).trim(), '高');
+    await page.locator('#prompt').fill('测试模型选择');
+    const submitted = page.waitForRequest(req => req.url() === origin + base + '/api/turn' && req.method() === 'POST');
+    await page.locator('#send').tap();
+    const payload = (await submitted).postDataJSON();
+    assert.deepEqual([payload.model, payload.effort, payload.prompt], ['bravo', 'high', '测试模型选择']);
+  } finally { await browser.close() }
+});
