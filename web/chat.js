@@ -211,6 +211,15 @@ function hostProject(path,id){
 }
 function isProjectPath(value){return /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(value)}
 function projectFolder(path){return path?.split(/[\\/]/).filter(Boolean).at(-1)}
+function wslDistribution(roots){
+  let name=null;
+  for(const root of roots){
+    const match=/^[/\\]{2}(?:wsl\$|wsl\.localhost)[/\\]([^/\\]+)(?:[/\\]|$)/i.exec(root);
+    if(!match||name&&name.toLowerCase()!==match[1].toLowerCase())return null;
+    name??=match[1]
+  }
+  return name
+}
 function projectName(path,id){
   const project=hostProject(path,id);
   const folder=projectFolder(path)||'default-workspace';
@@ -332,6 +341,11 @@ function renderSidebarHistory(){
       head.dataset.groupKey=path;
       const title=project?.name||projectName(path);
       toggle.append(icon(folded.has(path)?'folder-closed':'folder-open'),element('span','',title),icon(folded.has(path)?'chevron-right':'chevron-down'));
+      const distribution=wslDistribution(project?.roots||[path]);
+      if(distribution){
+        const label=element('small','project-environment',distribution);
+        label.title='WSL · '+distribution;toggle.insertBefore(label,toggle.lastElementChild)
+      }
       toggle.title=project?.roots.join('\n')||path||title;toggle.setAttribute('aria-expanded',String(!folded.has(path)));
       toggle.onclick=()=>{if(folded.has(path))folded.delete(path);else folded.add(path);db.foldedProjects=[...folded];save();renderSidebarHistory()};
       head.append(toggle);

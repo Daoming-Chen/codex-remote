@@ -823,3 +823,5 @@ dialog.rename-dialog{width:420px;max-width:92vw;border-radius:16px}
 html[data-theme=dark] #side .sidebar-wait{background:#242d3f;color:#339cff}
 
 @media(min-width:801px){#side .sidebar-wait{margin-inline-end:11px}}
+
+.project-row .project-environment{min-width:0;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px;font-weight:400}
