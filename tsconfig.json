@@ -24,6 +24,8 @@
     "packages/protocol/**/*.ts",
     "apps/receiver/src/device-directory.mts",
     "apps/workbench/src/markdown.ts",
-    "tests/*.test.ts"
+    "tests/*.test.ts",
+    "apps/workbench/src/dictation.ts",
+    "apps/workbench/src/types/*.d.ts"
   ]
 }
