@@ -272,7 +272,10 @@ function sidebarChatButton(title){
   return button
 }
 function renderSidebarHistory(){
-  const list=$('list');list.replaceChildren();
+  const list=$('list'),focused=document.activeElement;
+  const focusedGroup=list.contains(focused)?focused.closest('.group-head')?.dataset.groupKey:null;
+  const focusNew=focused.classList.contains('group-new');
+  list.replaceChildren();
   const pins=$('pins'),pinned=db.pinnedThreads||[],pinIds=new Set(pinned.map(item=>item.thread));
   pins.hidden=!pinned.length;pins.replaceChildren();
   if(pinned.length)pins.append(element('div','section-label','已置顶'));
@@ -309,6 +312,7 @@ function renderSidebarHistory(){
     const group=element('div','project-group'),project=projectsByKey.get(path);
     if(path){
       const head=element('div','group-head'),toggle=element('button','project-row');
+      head.dataset.groupKey=path;
       const title=project?.name||projectName(path);
       toggle.append(icon(folded.has(path)?'folder-closed':'folder-open'),element('span','',title),icon(folded.has(path)?'chevron-right':'chevron-down'));
       toggle.title=project?.roots.join('\n')||path||title;toggle.setAttribute('aria-expanded',String(!folded.has(path)));
@@ -349,7 +353,12 @@ function renderSidebarHistory(){
       }
     }
   }
-  restoreSidebarPosition()
+  restoreSidebarPosition();
+  if(focusedGroup){
+    const head=list.querySelector('.group-head[data-group-key="'+CSS.escape(focusedGroup)+'"]');
+    const button=head?.querySelector(focusNew?'.group-new':'.project-row');
+    button?.focus({preventScroll:true})
+  }
 }
 async function loadRemoteChat(item){
   const c=db.chats.find(x=>x.thread===item.thread);
