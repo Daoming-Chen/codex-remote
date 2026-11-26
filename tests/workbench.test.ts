@@ -18,7 +18,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
       ] } });
       if (path.endsWith('/api/models')) return route.fulfill({ json: {
         models: ['alpha', 'bravo', 'charlie', 'delta'].map(id => ({
-          id, name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low'], defaultEffort: 'low',
+          id, name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
         })),
         defaults: { model: 'alpha', effort: 'low' },
       } });
@@ -49,6 +49,25 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await modelSearch.waitFor();
     assert.equal(await page.locator('[data-recent]:visible').first().getAttribute('aria-label'), 'Model delta');
     await modelSearch.press('Escape');
+    await page.locator('#model-picker').click();
+    const effort = page.getByRole('slider', { name: '强度' });
+    await effort.evaluate(input => {
+      const slider = input as HTMLInputElement;
+      slider.value = '2';
+      slider.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    await page.locator('.effort-usage-reminder:visible').waitFor();
+    await effort.dispatchEvent('pointercancel');
+    assert.equal(await effort.inputValue(), '0');
+    await effort.press('End');
+    await page.locator('.effort-usage-reminder:visible').waitFor();
+    assert.match(await effort.getAttribute('aria-valuetext') || '', /第 3 项/);
+    await effort.press('Enter');
+    await page.locator('#model-picker').click();
+    assert.equal(await effort.inputValue(), '2');
+    await effort.press('ArrowLeft');
+    await page.locator('.effort-usage-reminder').waitFor({state: 'hidden'});
+    await effort.press('Enter');
     await draft.fill('保留这份草稿');
     await page.locator('#file').setInputFiles({ name: 'demo.png', mimeType: 'image/png',
       buffer: await readFile(new URL('../web/codex.png', import.meta.url)) });

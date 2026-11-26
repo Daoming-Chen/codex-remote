@@ -4339,40 +4339,15 @@ async function modelPicker(force=false,openList=false){
       const steps=ordinaryEfforts(model);
       if(!steps.length){resizeView(height);return}
       const currentEffort=composerModel(c).effort||model.defaultEffort;
-      const selected=steps.indexOf(steps.includes(currentEffort)?currentEffort:'medium');
-      const slider=element('input','effort-slider');
-      slider.type='range';slider.id='effort-slider';slider.min=0;slider.max=steps.length-1;slider.step=1;slider.value=String(Math.max(0,selected));
-      slider.setAttribute('aria-label','强度');
-      const control=element('div','effort-control'),ticks=element('div','effort-ticks'),hint=element('span','effort-hint');
-      ticks.setAttribute('aria-hidden','true');for(const step of steps)ticks.append(element('i'));
-      const usageReminder=element('p','effort-usage-reminder','使用额度消耗更快');
-      hint.id='effort-hint';hint.textContent='使用左右方向键调整强度';
-      slider.setAttribute('aria-describedby',hint.id);slider.setAttribute('aria-keyshortcuts','ArrowLeft ArrowRight');
-      slider.onkeydown=event=>{
-        if(event.key!=='Enter'||event.isComposing)return;
-        event.preventDefault();event.stopPropagation();closeDialog();
-        $('model-picker').focus()
-      };
-      slider.disabled=steps.length<2;
-      function update(){
-        const index=Number(slider.value),name=effortName(steps[index]);
-        const fraction=index/Math.max(1,steps.length-1);
-        ticks.style.setProperty('--selected-width','calc('+fraction*100+'% + '+(14-28*fraction)+'px)');
-        Array.from(ticks.children).forEach((tick,i)=>{tick.dataset.selected=String(i<=index)});
-        usageReminder.hidden=steps[index]!=='ultra'||slider.disabled;
-        slider.setAttribute('aria-valuetext',name+'，第 '+(index+1)+' 项，共 '+steps.length+' 项。'+(usageReminder.hidden?'':usageReminder.textContent));
-        effort.textContent=name;toggle.title='选择模型 · '+model.name+' · '+name
-      }
-      let committed=slider.value;
-      slider.oninput=update;
-      slider.onpointercancel=()=>{slider.value=committed;update()};
-      slider.onchange=()=>{
-        if(slider.value===committed)return;
-        committed=slider.value;update();
-        c.selectionDuringTurn=c.pending;c.selectedForNext=true;c.model=model.id;
-        c.modelName=model.name;c.effort=steps[Number(committed)];rememberConfiguration();save();modelLabel(c)
-      };
-      update();control.append(ticks,slider);panel.append(control,hint,usageReminder);
+      const control=WorkbenchComponents.renderEffortControl(panel,{
+        steps,initial:currentEffort,label:effortName,
+        preview(value){const name=effortName(value);effort.textContent=name;toggle.title='选择模型 · '+model.name+' · '+name},
+        commit(value){
+          c.selectionDuringTurn=c.pending;c.selectedForNext=true;c.model=model.id;
+          c.modelName=model.name;c.effort=value;rememberConfiguration();save();modelLabel(c)
+        },
+        confirm(){closeDialog();$('model-picker').focus()}
+      });
       if(fromList)animateViewEntry(control,-10,40);
       resizeView(height)
     }
