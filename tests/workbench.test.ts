@@ -108,3 +108,40 @@ test('select an authorized host, preview and remove attachments, retain the draf
     assert.equal(await draft.inputValue(), '保留这份草稿');
   } finally { await browser.close() }
 });
+
+test('authorization refresh discards a stale device before restoring a saved selection', async () => {
+  const browser = await chromium.launch(process.env.CHROMIUM_PATH
+    ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
+  try {
+    const page = await browser.newPage();
+    let requests = 0;
+    let openGate!: () => void;
+    const gate = new Promise<void>(resolve => { openGate = resolve });
+    const origin = 'http://localhost:49003';
+    await page.addInitScript(() => localStorage.setItem('codex-receiver-selected-device', 'old'));
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/') return route.fulfill({path: fileURLToPath(new URL('../web/devices.html', import.meta.url))});
+      if (path !== '/api/devices') return route.fulfill({status: 404, body: ''});
+      const first = ++requests === 1;
+      if (first) await gate;
+      return route.fulfill({json: {devices: first ? [
+        {deviceId: 'old', scope: 'a'.repeat(64), name: '先前的主机', online: true},
+      ] : []}});
+    });
+    const firstRequest = page.waitForRequest(origin + '/api/devices');
+    await page.goto(origin);
+    await firstRequest;
+    await page.evaluate(() => {
+      window.receiverAuthorized?.();
+      window.receiverAuthorized?.();
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+    });
+    openGate();
+    await page.getByText('当前账号暂无已授权设备').waitFor();
+    assert.equal(requests, 2);
+    assert.equal(page.url(), origin + '/');
+    assert.equal(await page.locator('#devices button').count(), 0);
+  } finally { await browser.close() }
+});

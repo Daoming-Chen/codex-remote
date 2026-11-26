@@ -25,12 +25,14 @@ function DeviceDirectory() {
     const lifetime = new AbortController();
     async function load() {
       window.clearTimeout(timer);
-      if (active) { queued = true; return }
+      if (active || document.hidden) return;
+      queued = false;
       active = true;
       setLoading(true);
       try {
         const response = await fetch('/api/devices', { method: 'POST', signal: lifetime.signal });
         const data = await response.json();
+        if (queued || lifetime.signal.aborted) return;
         if (!response.ok || !Array.isArray(data.devices) || !data.devices.every(isRemoteDevice)) throw Error(data.error || '无法获取设备');
         const list: Device[] = data.devices;
         const previous = localStorage.getItem(selectionKey);
@@ -49,14 +51,14 @@ function DeviceDirectory() {
           : previous && !saved ? '上次使用的设备已不在授权列表中。'
           : location.hash === '#directory-unavailable' ? '设备列表已恢复，请重新选择主机。' : '');
       } catch (error) {
-        if (lifetime.signal.aborted) return;
+        if (queued || lifetime.signal.aborted) return;
         setUnavailable(true);
         setStatus(error instanceof Error ? error.message : '无法获取设备');
       } finally {
         active = false;
         if (!lifetime.signal.aborted) {
           setLoading(false);
-          if (queued) { queued = false; void load() }
+          if (queued && !document.hidden) void load();
           else if (!document.hidden) timer = window.setTimeout(load, 15000);
         }
       }
@@ -65,7 +67,11 @@ function DeviceDirectory() {
     const visibility = () => document.hidden ? stopTimer() : void load();
     const show = (event: PageTransitionEvent) => { if (event.persisted) void load() };
     refresh.current = load;
-    window.receiverAuthorized = load;
+    window.receiverAuthorized = () => {
+      // An authorization change invalidates even a successful in-flight directory response.
+      queued = true;
+      void load();
+    };
     document.addEventListener('visibilitychange', visibility);
     window.addEventListener('pageshow', show);
     window.addEventListener('pagehide', stopTimer);
