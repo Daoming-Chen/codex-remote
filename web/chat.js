@@ -842,7 +842,16 @@ function pendingQuestions(c){
     }
   }
 }
-function composer(){const c=current();archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);if($('prompt').value!==(c.draft||''))$('prompt').value=c.draft||'';updateEnterHint();$('attachment').replaceChildren();for(const file of c.files){const chip=element('div','chip');if(file.remotePath)chip.title=(''+receiverName+' · ')+file.remotePath;chip.append(file.url?attachmentImage(file.url,file.name):icon(file.directory?'folder-open':'file-text'),element('span','',file.name),btn('移除 '+file.name,'x',()=>{c.files=c.files.filter(f=>f!==file);save();composer()}));$('attachment').append(chip)}resize()}
+let renderedDraftChat;
+function renderDraft(chat){
+  const input=$('prompt'),value=chat.draft||'';
+  // A same-value assignment leaves the previous chat's native undo history intact.
+  if(renderedDraftChat!==undefined&&renderedDraftChat!==chat.id&&input.value===value)
+    input.value=value?'':' ';
+  if(input.value!==value)input.value=value;
+  renderedDraftChat=chat.id
+}
+function composer(){const c=current();archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();$('attachment').replaceChildren();for(const file of c.files){const chip=element('div','chip');if(file.remotePath)chip.title=(''+receiverName+' · ')+file.remotePath;chip.append(file.url?attachmentImage(file.url,file.name):icon(file.directory?'folder-open':'file-text'),element('span','',file.name),btn('移除 '+file.name,'x',()=>{c.files=c.files.filter(f=>f!==file);save();composer()}));$('attachment').append(chip)}resize()}
 let readingReply=null;
 function stopReadingReply(){
   const active=readingReply;
