@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "regexpu-core": "6.5.4"
+  }
+}

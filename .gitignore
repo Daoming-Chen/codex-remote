@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+/dist/
+/web/state/
+/android/assets/
+/android/build/
+/android/native/*/
+*.apk
+*.jks
+*.keystore
+.env*
