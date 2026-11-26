@@ -18,17 +18,18 @@ for (const [source, output] of [
 ]) {
   for (const name of await readdir(resolve(root, source))) {
     if (!/\.(ts|mts|cts)$/.test(name) || name === 'markdown.ts') continue;
-    let script = await readFile(resolve(root, source, name), 'utf8');
-    if (name === 'receiver-worker.ts') {
-      const reconnect = await readFile(resolve(root, 'apps/workbench/offline/reconnect.ts'), 'utf8');
-      script = script.replace('/* OFFLINE_RECONNECT */', () => stripTypeScriptTypes(reconnect));
-    }
+    const script = await readFile(resolve(root, source, name), 'utf8');
     const filename = name.replace(/ts$/, 'js');
     const emitted = resolve(root, output, filename);
     await writeFile(emitted, stripTypeScriptTypes(script));
     execFileSync(process.execPath, ['--check', emitted], { stdio: 'inherit' });
   }
 }
+const offline = resolve(root, 'apps/workbench/offline');
+const reconnect = await readFile(resolve(offline, 'reconnect.ts'), 'utf8');
+const worker = await readFile(resolve(offline, 'receiver-worker.ts'), 'utf8');
+await writeFile(resolve(root, 'web/receiver-worker.js'),
+  stripTypeScriptTypes(worker).replace('/* OFFLINE_RECONNECT */', () => stripTypeScriptTypes(reconnect)));
 await build({
   absWorkingDir: root, entryPoints: ['apps/workbench/src/markdown.ts'],
   outfile: 'web/markdown.js', bundle: true, minify: true, target: 'es2020',

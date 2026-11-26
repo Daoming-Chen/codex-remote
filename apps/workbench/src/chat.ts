@@ -1093,7 +1093,21 @@ function renderWorkbench(){
   const detail=$('work-detail');
   if(workChat!==chat.id){rememberWorkScroll(detail);previousDetail=null;previousTabs='';workChat=chat.id}
   const summary=!!chat.summaryOpen&&chat.messages.length>0;
+  const home=!chat.messages.length&&!chat.thread;
+  const emptyPanel=home&&!!chat.emptyPanelOpen&&!view?.ids.length;
   const hidden=!!(chat.workHidden&&(summary||view?.ids.length));
+  $('header-options').hidden=home;
+  WorkbenchComponents.renderHomePanelToggle($('home-panel-toggle'),home,emptyPanel,toggleWorkPanel);
+  $('empty-work-panel').hidden=!emptyPanel;
+  if(emptyPanel){
+    pane.hidden=false;
+    $('work-detail').replaceChildren();
+    $('work-tabs').replaceChildren();
+    $('work-tab-list').hidden=true;
+    $('work-show').hidden=true;
+    previousDetail=null;previousTabs='';
+    return
+  }
   $('work-show').hidden=!hidden;
   $('work-tab-list').hidden=summary;
   $('header-summary').setAttribute('aria-pressed',String(summary&&!hidden));
@@ -1212,7 +1226,17 @@ $('work-tab-list').onclick=()=>{
     if(index!==undefined){e.preventDefault();choices[index]?.focus()}
   }
 };
+function toggleWorkPanel(){
+  const chat=current();
+  if(!chat.messages.length&&!chat.thread&&!chat.workView?.ids.length){
+    chat.emptyPanelOpen=!chat.emptyPanelOpen;save();renderWorkbench();return
+  }
+  if(!$('workbench').hidden)$('work-hide').click();
+  else if(!$('work-show').hidden)$('work-show').click();
+  else if(chat.messages.length)$('header-summary').click()
+}
 $('work-hide').onclick=()=>{
+  if(!$('empty-work-panel').hidden){toggleWorkPanel();$('home-panel-toggle').firstElementChild?.focus();return}
   rememberWorkScroll($('work-detail'));current().workHidden=true;save();renderWorkbench();$('work-show').focus()
 };
 $('work-show').onclick=()=>{
@@ -1220,6 +1244,7 @@ $('work-show').onclick=()=>{
 };
 $('work-close').onclick=()=>{
   const chat=current();
+  if(!$('empty-work-panel').hidden){toggleWorkPanel();$('home-panel-toggle').firstElementChild?.focus();return}
   if(chat.summaryOpen)chat.summaryOpen=false;
   else{
     for(const id of chat.workView?.ids||[])pageStorage.removeItem(workScrollKey(chat.id,id));
@@ -2894,6 +2919,7 @@ const commands=[
   }},
   {name:'新聊天',icon:'square-pen',keys:['n','shift+o'],run:start},
   {name:'搜索聊天',icon:'search',keys:[],run:search},
+  {name:'切换侧面板',icon:'panel-left',keys:['alt+b'],run:toggleWorkPanel},
   {name:'切换项目侧栏',icon:'panel-left',keys:['b','shift+s'],run:()=>action('sidebar')},
   {name:'后退',icon:'chevron-down',keys:['['],run:()=>$('chat-back').click()},
   {name:'前进',icon:'chevron-down',keys:[']'],run:()=>$('chat-forward').click()},

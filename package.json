@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "npm run typecheck && node scripts/build.ts",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p apps/workbench/offline/tsconfig.worker.json",
     "package:web": "npm run build && python scripts/package_web.py",
     "test:ui": "npm run build && node --test tests/workbench.test.ts"
   },

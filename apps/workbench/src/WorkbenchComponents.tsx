@@ -1,6 +1,13 @@
 import { render } from 'preact';
 export { renderAttachments } from './AttachmentTray.js';
 
+export function renderHomePanelToggle(container: HTMLElement, visible: boolean, pressed: boolean, toggle: () => void) {
+  render(visible ? <button class="icon" type="button" aria-label="切换侧面板" title="切换侧面板"
+    aria-controls="workbench" aria-pressed={pressed} onClick={toggle}>
+    <svg aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><use href="/icons.svg#panel-left" /></svg>
+  </button> : null, container);
+}
+
 interface WelcomeProps {
   project?: string;
   cwd?: string;

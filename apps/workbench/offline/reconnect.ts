@@ -1,6 +1,6 @@
 
 const guide=document.querySelector<HTMLElement>('#guide')!;
-if(/Android/i.test(navigator.userAgent))guide.innerHTML='请在 Termux 中进入接收端目录，运行 <code>sh start.sh</code>。';
+if(/Android/i.test(navigator.userAgent))guide.innerHTML='请重新打开接收端应用。使用独立 Web 包时，请在接收端目录运行 <code>sh start.sh</code>。';
 else if(/Windows/i.test(navigator.userAgent))guide.textContent='请在接收端目录中运行 start.cmd。';
 let timer: number | undefined,checking=false,delay=1000;
 async function check(){

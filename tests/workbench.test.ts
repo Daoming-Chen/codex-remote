@@ -34,6 +34,13 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.waitForURL('**/devices/' + scope + '/');
     assert.equal(await page.evaluate(() => localStorage.getItem('codex-receiver-selected-device')), 'first');
     assert.equal(await page.locator('#home-title').innerText(), '我们要构建什么？');
+    const panelToggle = page.getByRole('button', { name: '切换侧面板', exact: true });
+    assert(await page.locator('#header-options').isHidden());
+    await panelToggle.click();
+    assert(await page.locator('#empty-work-panel').isVisible());
+    assert.equal(await panelToggle.getAttribute('aria-pressed'), 'true');
+    await page.keyboard.press('Control+Alt+b');
+    assert(await page.locator('#workbench').isHidden());
     const draft = page.locator('#prompt');
     await draft.fill('/model');
     await draft.press('Enter');
