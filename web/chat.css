@@ -819,5 +819,7 @@ dialog.rename-dialog{width:420px;max-width:92vw;border-radius:16px}
   html[data-theme=dark] #layout.empty main::after{border:1px solid #212121;border-radius:inherit}
 }
 
-#side .sidebar-wait{flex:none;margin-inline-start:4px;border-radius:999px;padding:1px 7px;background:#e4edf9;color:#2166aa;font-size:12px;line-height:20px;white-space:nowrap}
-html[data-theme=dark] #side .sidebar-wait{background:#202c40;color:#5fa9f5}
+#side .sidebar-wait{flex:none;margin-inline-start:4px;border-radius:999px;padding:1px 9px;background:#e4edf9;color:#2166aa;font-size:13px;line-height:20px;white-space:nowrap}
+html[data-theme=dark] #side .sidebar-wait{background:#242d3f;color:#339cff}
+
+@media(min-width:801px){#side .sidebar-wait{margin-inline-end:11px}}
