@@ -2348,6 +2348,10 @@ function anchorHeaderMenu(button){
   dialog.style.setProperty('--menu-left',Math.max(8,Math.min(rect.right-224,innerWidth-232))+'px');
   dialog.style.setProperty('--menu-top',rect.bottom+5+'px');
   const body=$('dialog-body');
+  enableMenuNavigation(body);
+  body.querySelector('.modal-row:not(:disabled)')?.focus()
+}
+function enableMenuNavigation(body){
   body.onkeydown??=event=>{
     const buttons=Array.from(body.querySelectorAll('button:not(:disabled)'));
     const index=buttons.indexOf(document.activeElement);
@@ -2355,7 +2359,6 @@ function anchorHeaderMenu(button){
     const next={Home:0,End:buttons.length-1,ArrowDown:(index+1)%buttons.length,ArrowUp:(index-1+buttons.length)%buttons.length}[event.key];
     if(next!==undefined){event.preventDefault();buttons[next].focus()}
   };
-  body.querySelector('.modal-row:not(:disabled)')?.focus()
 }
 $('header-share').onclick=()=>{
   const c=current(),body=modal('分享对话',$('header-share'));
@@ -3663,6 +3666,14 @@ $('steer').onclick=()=>steer(current());
 $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}if(c.pending||c.activeTurn){await steer(c);return}if(readingFiles.has(c)||(!text&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const prompt=promptWithFiles(text,files);if(new TextEncoder().encode(prompt).length>16000){toast('单条消息最多 16 KB');return}
+  const openingFocus=document.activeElement;
+  function focusPermission(){
+    enableMenuNavigation(body);
+    if(document.activeElement===openingFocus){
+      const choice=body.querySelector('[aria-pressed=true]')||body.querySelector('button');
+      choice?.focus({preventScroll:true})
+    }
+  }
   let native;
   try{native=await nativePermissions()}catch(error){toast(error.message);return}
   if(current()!==c||c.pending||c.activeTurn||c.archived||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
@@ -4579,6 +4590,14 @@ async function permissionView(beforeSend=false){
   body.append(activeReport,element('div','preference-label','下一轮权限'));updatePermissionLabel(c);
   const selected=c.sandbox||'read-only';
   const loading=element('p','quiet','正在读取主机权限…');body.append(loading);
+  const openingFocus=document.activeElement;
+  function focusPermission(){
+    enableMenuNavigation(body);
+    if(document.activeElement===openingFocus){
+      const choice=body.querySelector('[aria-pressed=true]')||body.querySelector('button');
+      choice?.focus({preventScroll:true})
+    }
+  }
   let native;
   try{native=await nativePermissions()}catch(error){
     if(body.contains(loading))loading.textContent=error.message;
@@ -4595,7 +4614,7 @@ async function permissionView(beforeSend=false){
       },checked?'✓':'');
       pick.setAttribute('aria-pressed',String(checked));body.append(pick)
     }
-    return
+    focusPermission();return
   }
   for(const [mode,label] of permissionNames){
     const pick=row(label,'shield',async()=>{
@@ -4627,6 +4646,7 @@ async function permissionView(beforeSend=false){
     if(c.permissions.threadSandbox&&typeof c.permissions.threadApproval==='string')
       body.append(element('p','quiet','主机报告的会话设置 · '+c.permissions.threadSandbox+' / '+c.permissions.threadApproval))
   }
+  focusPermission()
 }
 function contextRemaining(usage){
   if(!Number.isFinite(usage?.total)||usage.total<0||!Number.isFinite(usage.contextWindow)||usage.contextWindow<=0)return null;
