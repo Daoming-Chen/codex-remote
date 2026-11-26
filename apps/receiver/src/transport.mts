@@ -1,4 +1,4 @@
-import './receiver-runtime.mjs';
+import {withEmbeddedCredentialLock} from './receiver-runtime.mjs';
 import {CodexRemoteClient,ClientModeRuntime,resolveConfig,IdentityStore,serverStorageDirectory,ClientServerApi,ServerCredentialStore} from './vendor/remote.mjs';
 import {access} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
@@ -33,7 +33,10 @@ class DirectoryServerApi extends ClientServerApi{
 function createClient(relay,ServerApi=ClientServerApi){
   const config=resolveConfig({serverUrl:url,forceRelay:relay});
   const ids=new IdentityStore({directory,role:'client'});
-  const server=new ServerApi(url,new ServerCredentialStore(directory),fetch,config.httpServerAllowlist);
+  const store=new ServerCredentialStore(directory);
+  if(process.env.CODEX_RECEIVER_UI==='android'&&process.platform==='android')
+    store.withRefreshLock=withEmbeddedCredentialLock;
+  const server=new ServerApi(url,store,fetch,config.httpServerAllowlist);
   const runtime=new ClientModeRuntime(config,ids,server,{async invoke(){throw Error('Local dispatch not used')}},{info(){},warn(){},error(){},debug(){}});
   return {runtime,server}
 }

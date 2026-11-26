@@ -1680,6 +1680,8 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     json(404,{error:'未找到'})
   }catch(e){
     const diagnostic=deviceId&&req.method==='POST'&&req.url==='/api/connection'?getLastDisconnect?.():null;
+    if(e.code==='REMOTE_NOT_PAIRED'&&process.env.CODEX_RECEIVER_UI==='android')
+      return json(503,{code:e.code,error:'完成应用内的 Remote 设备授权后，即可选择主机。'});
     if(['REMOTE_NOT_PAIRED','REMOTE_HOST_ABSENT','REMOTE_HOST_OFFLINE'].includes(e.code))return json(503,{code:e.code,error:e.message,...(diagnostic&&e.code==='REMOTE_HOST_OFFLINE'?{lastDisconnect:diagnostic}:{})});
     if(/TRANSPORT|CONNECT|TIMEOUT|fetch failed|Control socket|timed out/i.test([e.code,e.message,e.cause?.code].join(' ')))
       return json(503,{error:'ds-harness-remote 连接未就绪，请重试',...(diagnostic?{lastDisconnect:diagnostic}:{})});

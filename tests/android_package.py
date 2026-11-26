@@ -23,7 +23,7 @@ export async function authorizeReceiver({onScanUrl}){
 }
 export async function* remoteLines(){throw Error('offline fixture')}
 export function bindReceiverDevice(){}
-export async function listReceiverDevices(){return []}
+export async function listReceiverDevices(){await requireReceiverIdentity();return []}
 export async function requireReceiverIdentity(){throw Object.assign(Error('offline fixture'),{code:'REMOTE_NOT_PAIRED'})}
 """)
   child=subprocess.Popen([os.environ.get('TEST_NODE','node'),str(app/'embedded.mjs')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
@@ -54,6 +54,13 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
    try:urllib.request.urlopen(url);raise AssertionError('missing cookie accepted')
    except urllib.error.HTTPError as e:assert e.code==403
    assert (app/'devices.html').read_bytes() == urllib.request.urlopen(urllib.request.Request(url,headers={'Cookie':'receiver=isolated-cookie'})).read()
+   request=urllib.request.Request(url+'api/devices',method='POST',headers={
+    'Cookie':'receiver=isolated-cookie','Origin':url.rstrip('/')
+   })
+   try:urllib.request.urlopen(request);raise AssertionError('unpaired directory accepted')
+   except urllib.error.HTTPError as error:
+    assert error.code==503
+    assert json.load(error)=={'code':'REMOTE_NOT_PAIRED','error':'完成应用内的 Remote 设备授权后，即可选择主机。'}
    for endpoint in ('api/client-version','chat.js'):
     try:urllib.request.urlopen(url+endpoint);raise AssertionError('missing cookie accepted')
     except urllib.error.HTTPError as e:assert e.code==403

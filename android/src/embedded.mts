@@ -11,6 +11,7 @@ process.env.TMPDIR=fileURLToPath(file('tmp'));
 process.env.DSH_HOME=fileURLToPath(file('identity'));
 process.env.HOME=fileURLToPath(root);
 process.env.CODEX_WEB_PORT=String(cfg.port);
+process.env.CODEX_RECEIVER_UI='android';
 const {authorizeReceiver,receiverIdentityDirectory}=await import('./transport.mjs');
 async function preserveEmptyIdentity(directory){
   try{
