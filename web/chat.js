@@ -906,7 +906,7 @@ function chatWorkRecords(chat){
 }
 function newWorkTabButton(){
   const button=btn('新建标签页','plus',()=>{
-    const chat=current(),body=modal('新建标签页');
+    const chat=current(),body=modal('新建标签页',button);
     const records=[...chatWorkRecords(chat).values()].reverse();
     const titles=new Map();
     for(const item of records){
@@ -1090,7 +1090,7 @@ function renderWorkbench(){
     const close=btn('关闭 '+tab.title,'x',()=>closeTabs(new Set([record.id]),openRecords[index+1]?.id||openRecords[index-1]?.id));
     function tabMenu(){
       tab.focus({preventScroll:true});
-      const body=modal('标签页操作');
+      const body=modal('标签页操作',tab);
       const others=openRecords.filter(r=>r.id!==record.id),right=openRecords.slice(index+1);
       for(const [label,targets,fallback] of [['关闭',[record],openRecords[index+1]?.id||openRecords[index-1]?.id],['关闭其他标签页',others,record.id],['关闭右侧标签页',right,record.id]]){
         const option=row(label,'x',()=>{
@@ -1150,7 +1150,7 @@ function renderWorkbench(){
   detail.scrollTop=Number(pageStorage.getItem(workScrollKey(chat.id,record.id)))||0
 }
 $('work-tab-list').onclick=()=>{
-  const trigger=$('work-tab-list'),body=modal('已打开的标签页'),tabs=$('work-tabs');
+  const trigger=$('work-tab-list'),body=modal('已打开的标签页',trigger),tabs=$('work-tabs');
   for(const tab of tabs.querySelectorAll('.work-tab')){
     const id=tab.dataset.record,active=tab.getAttribute('aria-pressed')==='true';
     const choice=row(tab.title,active?'check':'file-text',()=>{
@@ -2211,7 +2211,7 @@ async function togglePlanMode(){
     c.collaborationMode=c.collaborationMode==='plan'?'default':'plan';save();closeDialog();composer();$('prompt').focus()
   }catch(e){toast(e.message)}
 }
-function options(c){const body=modal('聊天选项');body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(c.archived||(!c.thread&&!c.messages?.length))return;
+function options(c,anchor=null){const body=modal('聊天选项',anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(c.archived||(!c.thread&&!c.messages?.length))return;
   if(c.thread&&!c.pending&&!c.activeTurn&&!c.archived){const button=row('归档聊天','folder-open',()=>setArchived(c.thread,true,button));body.append(button)}
   if(c.thread&&Array.isArray(db.pinnedThreads)){
     const pinned=db.pinnedThreads.some(item=>item.thread===c.thread);
@@ -2261,14 +2261,22 @@ function anchorHeaderMenu(button){
   dialog.classList.add('header-menu');
   dialog.style.setProperty('--menu-left',Math.max(8,Math.min(rect.right-224,innerWidth-232))+'px');
   dialog.style.setProperty('--menu-top',rect.bottom+5+'px');
-  dialog.querySelector('.modal-row')?.focus()
+  const body=$('dialog-body');
+  body.onkeydown=event=>{
+    const buttons=Array.from(body.querySelectorAll('button:not(:disabled)'));
+    const index=buttons.indexOf(document.activeElement);
+    if(!buttons.length)return;
+    const next={Home:0,End:buttons.length-1,ArrowDown:(index+1)%buttons.length,ArrowUp:(index-1+buttons.length)%buttons.length}[event.key];
+    if(next!==undefined){event.preventDefault();buttons[next].focus()}
+  };
+  body.querySelector('.modal-row:not(:disabled)')?.focus()
 }
 $('header-share').onclick=()=>{
-  const c=current(),body=modal('分享对话');
-  body.append(row('复制 Markdown','copy',async()=>{
-    try{await copyText(c.messages.map(exportMessage).join('\n\n'));closeDialog();toast('已复制对话')}
+  const c=current(),body=modal('分享对话',$('header-share'));
+  const copy=row('复制 Markdown','copy',async()=>{
+    try{await copyText(c.messages.map(exportMessage).join('\n\n'));if(body.contains(copy))closeDialog();toast('已复制对话')}
     catch{toast('浏览器未允许复制')}
-  }),row('导出 Markdown','download',()=>downloadTranscript(c)));
+  });body.append(copy,row('导出 Markdown','download',()=>downloadTranscript(c)));
   anchorHeaderMenu($('header-share'))
 };
 async function forkChat(c,lastTurn){
@@ -2750,8 +2758,8 @@ function toggleSidebar(){
   }
   db.collapsed=!db.collapsed;layout.classList.toggle('collapsed',db.collapsed);save()
 }
-function action(name){switch(name){case 'scheduled':scheduledView();break;case 'plugins':pluginsView();break;case 'home':db.collapsed=false;$('layout').classList.remove('collapsed');save();select(current());break;case 'new':start();break;case 'search':search();break;case 'close':closeDialog();break;case 'options':options(current());break;case 'settings':settings();break;case 'attach':attachmentMenu();break;case 'project':remotePicker(true);break;case 'permissions':permissionView();break;case 'account-usage':accountUsage();break;case 'usage':usageView();break;case 'plan-mode':void togglePlanMode();break;case 'models':modelPicker();break;case 'active-threads':activeThreadView();break;case 'refresh-activity':refreshActivity();break;case 'remote':remotePicker(false);break;case 'connection':connectionView();break;case 'sidebar':toggleSidebar();break}}
-document.addEventListener('click',e=>{const hit=e.target.closest('[data-action]');if(hit){action(hit.dataset.action);if(hit.id==='header-options')anchorHeaderMenu(hit)}});
+function action(name,trigger){switch(name){case 'scheduled':scheduledView();break;case 'plugins':pluginsView();break;case 'home':db.collapsed=false;$('layout').classList.remove('collapsed');save();select(current());break;case 'new':start();break;case 'search':search();break;case 'close':closeDialog();break;case 'options':options(current(),trigger?.id==='header-options'?trigger:null);break;case 'settings':settings();break;case 'attach':attachmentMenu();break;case 'project':remotePicker(true);break;case 'permissions':permissionView();break;case 'account-usage':accountUsage();break;case 'usage':usageView();break;case 'plan-mode':void togglePlanMode();break;case 'models':modelPicker();break;case 'active-threads':activeThreadView();break;case 'refresh-activity':refreshActivity();break;case 'remote':remotePicker(false);break;case 'connection':connectionView();break;case 'sidebar':toggleSidebar();break}}
+document.addEventListener('click',e=>{const hit=e.target.closest('[data-action]');if(hit){action(hit.dataset.action,hit);if(hit.id==='header-options')anchorHeaderMenu(hit)}});
 function isDialogBackdrop(event){
   const dialog=$('dialog');
   if(event.target!==dialog)return false;
