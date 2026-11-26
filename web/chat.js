@@ -2853,14 +2853,45 @@ function shortcutLabel(key){
 function keyboardShortcuts(restore=false){
   const body=openSidePage('keyboard-shortcuts','键盘快捷键',restore===true);
   if(!body)return;
-  const list=element('dl','shortcut-list');
-  for(const entry of [{name:'命令菜单',keys:commandMenuKeys},...commands]){
-    if(!entry.keys.length)continue;
-    const values=element('dd');
-    for(const key of entry.keys)values.append(element('kbd','',shortcutLabel(key)));
-    list.append(element('dt','',entry.name),values)
+  const toolbar=element('div','shortcut-search'),field=element('input','field');
+  const capture=element('button','','使用快捷键搜索'),list=element('dl','shortcut-list');
+  const empty=element('p','quiet','没有匹配的快捷键');
+  empty.setAttribute('role','status');capture.type='button';
+  let captureMode=false,captured=null;
+  const entries=[{name:'命令菜单',keys:commandMenuKeys},...commands].filter(entry=>entry.keys.length);
+  function render(){
+    list.replaceChildren();
+    const query=field.value.trim().toLowerCase().replaceAll(' ','');
+    for(const entry of entries){
+      const labels=entry.keys.map(shortcutLabel);
+      if(captureMode?captured!==null&&!entry.keys.includes(captured):
+        ![entry.name,...labels].some(text=>text.toLowerCase().includes(query)))continue;
+      const values=element('dd');
+      for(const label of labels)values.append(element('kbd','',label));
+      list.append(element('dt','',entry.name),values)
+    }
+    empty.hidden=list.childElementCount>0
   }
-  body.append(list);
+  function setCapture(enabled){
+    captureMode=enabled;captured=null;field.value='';field.readOnly=enabled;
+    field.type=enabled?'text':'search';field.placeholder=enabled?'按下搜索快捷键':'搜索快捷键';
+    field.setAttribute('aria-label',enabled?'捕获搜索快捷键':'搜索键盘快捷键');
+    capture.setAttribute('aria-pressed',String(enabled));render()
+  }
+  capture.onclick=()=>{setCapture(!captureMode);field.focus()};
+  field.oninput=render;
+  field.onkeydown=e=>{
+    if(!captureMode||isCompositionKey(e)||e.key==='Tab')return;
+    e.stopPropagation();e.preventDefault();
+    if(e.key==='Escape'){setCapture(false);field.focus();return}
+    if(e.repeat||['Control','Meta','Alt','Shift','AltGraph'].includes(e.key))return;
+    const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
+    const primary=navigator.platform.startsWith('Mac')?e.metaKey:e.ctrlKey;
+    captured=primary?key:'';
+    field.value=primary?shortcutLabel(key):key;
+    render()
+  };
+  setCapture(false);toolbar.append(field,capture);body.append(toolbar,list,empty);
   const heading=body.querySelector('h1');heading.tabIndex=-1;heading.focus({preventScroll:true})
 }
 function openThreadFind(){
