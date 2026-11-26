@@ -3780,22 +3780,52 @@ async function remotePicker(projects){
   const body=modal(projects?'选择远程项目':(''+receiverName+' 的会话'),projects?document.querySelector('[data-action=project]'):null),panel=element('div','results'),status=element('p','quiet','正在读取 Codex 会话目录…');body.append(status,panel);
   if(projects&&menuAnchor)$('dialog').classList.add('composer-menu');
   const seen=new Set();
+  const search=projects?element('input','field'):null;
+  const empty=element('p','quiet','已加载的项目中没有匹配项。');
+  function filterProjects(){
+    if(!search)return;
+    const query=search.value.trim().toLocaleLowerCase();
+    const choices=Array.from(panel.querySelectorAll('[data-project-option]'));
+    for(const choice of choices)choice.hidden=!choice.textContent.toLocaleLowerCase().includes(query);
+    empty.hidden=!query||choices.some(choice=>!choice.hidden)
+  }
+  if(search){
+    search.type='search';search.placeholder='搜索项目';search.setAttribute('aria-label',search.placeholder);
+    empty.hidden=true;empty.setAttribute('role','status');body.prepend(search);body.append(empty);
+    search.oninput=filterProjects;
+    body.onkeydown=event=>{
+      if(isCompositionKey(event)||!['ArrowDown','ArrowUp','Enter'].includes(event.key))return;
+      const choices=Array.from(panel.querySelectorAll('button:not([hidden]):not(:disabled)'));
+      if(event.key==='Enter'){
+        if(event.target===search){event.preventDefault();choices.find(button=>button.hasAttribute('data-project-option'))?.click()}
+        return
+      }
+      if(!choices.length)return;
+      event.preventDefault();const i=choices.indexOf(event.target);
+      choices[(event.key==='ArrowDown'?i+1:i<0?choices.length-1:i-1+choices.length)%choices.length].focus()
+    };
+    if(!matchMedia('(pointer:coarse)').matches)search.focus()
+  }
   function appendItems(items){
       for(const item of items){
         if(projects){const id=hostProject(item.cwd,item.projectId)?.id||null,key=JSON.stringify([id,item.cwd]);if(!item.cwd||seen.has(key))continue;seen.add(key);
-          panel.append(row(projectName(item.cwd,id),'folder-open',()=>chooseProject(item.cwd,id),item.cwd));continue}
+          const choice=row(projectName(item.cwd,id),'folder-open',()=>chooseProject(item.cwd,id),item.cwd);
+          choice.dataset.projectOption=key;panel.append(choice);continue}
         panel.append(row(item.title,'message-circle',()=>loadRemoteChat(item)))
       }
   }
   const roots=()=>(db.hostProjects||[]).flatMap(p=>p.roots.map(cwd=>({cwd,projectId:p.id})));
   if(projects)appendItems(roots());
   if(db.hostIndex?.length){appendItems(db.hostIndex);status.textContent='已显示上次读取的目录，正在刷新…'}
+  filterProjects();
   async function load(cursor){
     try{
       const page=await directoryPage(cursor);if(!body.contains(panel))return;
       status.textContent=projects?(current().thread||current().messages.length?'选择项目将打开一条新任务。':'选择此草稿的工作目录。'):'选择会话以读取主机上的历史记录。';
+      const focusedKey=panel.contains(document.activeElement)?document.activeElement.dataset.projectOption:null;
       if(!cursor){panel.replaceChildren();seen.clear();if(projects)appendItems(roots())}
-      appendItems(page.items);
+      appendItems(page.items);filterProjects();
+      if(!cursor&&focusedKey){const match=Array.from(panel.children).find(el=>el.dataset.projectOption===focusedKey&&!el.hidden);(match||search)?.focus()}
       if(page.cursor){const more=row('加载更多','chevron-down',()=>{more.remove();load(page.cursor)});panel.append(more)}
       if(!panel.children.length)status.textContent='此主机没有返回会话。'
     }catch(e){
