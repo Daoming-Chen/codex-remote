@@ -406,11 +406,19 @@ function nativeActivity(item){
   record.output=output.slice(-16384);record.truncated=output.length>record.output.length;
   return record
 }
+function projectDirectoryKey(path){
+  if(typeof path!=='string'||!path)return null;
+  const windows=/^(?:[a-z]:[\\/]|\\\\|\/\/)/i.test(path);
+  const canonical=windows?path.replaceAll('\\','/').toLowerCase():path;
+  return canonical.replace(/\/+$/,'')||'/'
+}
 function nativeProjectId(thread){
   if(thread.projectId)return thread.projectId;
+  const cwd=projectDirectoryKey(thread.cwd);
+  if(cwd===null)return null;
   let match;
   for(const [id,roots] of nativeRoots){
-    if(!roots.includes(thread.cwd))continue;
+    if(!roots.some(root=>projectDirectoryKey(root)===cwd))continue;
     if(match)return null;
     match=id
   }
@@ -519,7 +527,7 @@ async function nativeDirectory(call,mode,target){
   }
   result.items=page.data.map(t=>({thread:t.id,title:t.name||t.preview||'新聊天',cwd:t.cwd,updated:t.updatedAt,projectId:nativeProjectId(t)}));
   if(query.projectId)result.items=result.items.filter(item=>item.projectId===query.projectId);
-  if(query.projectCwd)result.items=result.items.filter(item=>!item.projectId&&item.cwd===query.projectCwd);
+  if(query.projectCwd)result.items=result.items.filter(item=>!item.projectId&&projectDirectoryKey(item.cwd)===projectDirectoryKey(query.projectCwd));
   return result
 }
 async function remoteThreads(mode,target){

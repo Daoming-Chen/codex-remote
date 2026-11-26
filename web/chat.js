@@ -197,10 +197,16 @@ function theme(){
   document.querySelector('meta[name="theme-color"]').content=selected==='dark'?'#1f1a1e':'#f9f9f9'
 }
 dark.addEventListener('change',theme);
+function projectDirectoryKey(path){
+  const canonical=isWindowsRoot(path)||path.startsWith('//')?path.replaceAll('\\','/').toLowerCase():path;
+  return canonical.replace(/\/+$/,'')||'/'
+}
 function hostProject(path,id){
   const projects=db.hostProjects||[];
   if(id)return projects.find(p=>p.id===id);
-  const matches=projects.filter(p=>p.roots.includes(path));
+  if(!path)return null;
+  const key=projectDirectoryKey(path);
+  const matches=projects.filter(p=>p.roots.some(root=>projectDirectoryKey(root)===key));
   return matches.length===1?matches[0]:null
 }
 function isProjectPath(value){return /^(?:\/|[a-z]:[\\/]|\\\\)/i.test(value)}
