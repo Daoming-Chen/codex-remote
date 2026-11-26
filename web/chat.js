@@ -274,7 +274,7 @@ function renderSidebarHistory(){
     const local=db.chats.find(c=>c.thread===item.thread),wrap=element('div','history-row'+(local===current()?' active':''));
     const button=sidebarChatButton(local?.title||item.title);button.onclick=()=>loadRemoteChat(item);wrap.append(button);
     showUnread(button,local?.readState??item.readState);
-    wrap.append(btn('聊天选项','ellipsis',()=>options(local||item),'icon more'));pins.append(wrap)
+    wrap.append(btn('聊天选项','ellipsis',event=>options(local||item,event.currentTarget),'icon more'));pins.append(wrap)
   }
   const groups=new Map(),seen=new Set(),folded=new Set(db.foldedProjects||[]);
   const add=(path,item)=>{if(!groups.has(path))groups.set(path,[]);groups.get(path).push(item)};
@@ -326,7 +326,7 @@ function renderSidebarHistory(){
       const wrap=element('div','history-row'+(item.local===current()?' active':'')),pick=sidebarChatButton(item.title);
       pick.dataset.thread=item.local?.thread||item.remote?.thread||'';pick.onclick=()=>item.local?openCachedChat(item.local):loadRemoteChat(item.remote);
       showUnread(pick,(item.local||item.remote).readState);
-      wrap.append(pick);wrap.append(btn('聊天选项','ellipsis',()=>options(item.local||item.remote),'icon more'));group.append(wrap)
+      wrap.append(pick);wrap.append(btn('聊天选项','ellipsis',event=>options(item.local||item.remote,event.currentTarget),'icon more'));group.append(wrap)
     }
     const sources=project?[path,...project.roots.filter(root=>hostProject(root)?.id===project.id)]:isProjectPath(path)?[path]:[];
     const remaining=sources.filter(source=>projectPages.get(source)?.more??!!db.directoryCursor);
@@ -1896,7 +1896,7 @@ function closeDialog(){
 function modal(title,anchor=null){
   closeDialog();
   const dialog=$('dialog');
-  dialog.classList.remove('chat-search','model-menu','model-command-menu','context-menu','header-menu','image-viewer','composer-menu','inline-menu');
+  dialog.classList.remove('chat-search','model-menu','model-command-menu','context-menu','header-menu','image-viewer','composer-menu','inline-menu','sidebar-menu-above');
   $('dialog-title').textContent=title;
   const body=$('dialog-body');body.onkeydown=null;body.replaceChildren();
   if(anchor?.getClientRects().length){
@@ -2228,7 +2228,20 @@ async function togglePlanMode(){
     c.collaborationMode=c.collaborationMode==='plan'?'default':'plan';save();closeDialog();composer();$('prompt').focus()
   }catch(e){toast(e.message)}
 }
-function options(c,anchor=null){const body=modal('聊天选项',anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(c.archived||(!c.thread&&!c.messages?.length))return;
+function positionSidebarMenu(anchor){
+  const dialog=$('dialog'),r=anchor.getBoundingClientRect();
+  dialog.classList.add('header-menu');
+  dialog.style.setProperty('--menu-left',Math.max(8,Math.min(r.left,innerWidth-232))+'px');
+  const below=innerHeight-r.bottom-8;
+  if(below>=240||below>=r.top){
+    dialog.style.setProperty('--menu-top',r.bottom+4+'px')
+  }else{
+    dialog.style.setProperty('--menu-top','auto');
+    dialog.classList.add('sidebar-menu-above');
+    dialog.style.setProperty('--sidebar-menu-bottom',innerHeight-r.top+4+'px')
+  }
+}
+function options(c,anchor=null){const body=modal('聊天选项',anchor);if(anchor?.closest('.history-row'))positionSidebarMenu(anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(anchor?.closest('.history-row'))body.querySelector('button')?.focus();if(c.archived||(!c.thread&&!c.messages?.length))return;
   if(c.thread&&!c.pending&&!c.activeTurn&&!c.archived){const button=row('归档聊天','folder-open',()=>setArchived(c.thread,true,button));body.append(button)}
   if(c.thread&&Array.isArray(db.pinnedThreads)){
     const pinned=db.pinnedThreads.some(item=>item.thread===c.thread);
@@ -2266,7 +2279,7 @@ function options(c,anchor=null){const body=modal('聊天选项',anchor);body.app
     });body.append(mark)
   }
   if(c.thread&&!c.pending&&c.messages?.length)body.append(row('从此对话创建分支','square-pen',()=>forkChat(c)));
-  body.append(row('重命名','pencil',()=>renameChat(c)));
+  body.append(row('重命名','pencil',()=>renameChat(c,anchor)));
   if(c.messages?.length)body.append(row('导出 Markdown','download',()=>downloadTranscript(c)))
 }
 function downloadTranscript(c){
@@ -4492,8 +4505,9 @@ function usageView(){
   renderContextUsage(u)
 }
 
-function renameChat(c){
-  const body=modal('重命名聊天'),field=element('input','field'),status=element('p','quiet');
+function renameChat(c,anchor=null){
+  const body=modal('重命名聊天',anchor),field=element('input','field'),status=element('p','quiet');
+  if(menuAnchor){if(anchor.closest('.history-row'))positionSidebarMenu(anchor);else anchorHeaderMenu(anchor)}
   field.value=c.title;field.maxLength=120;field.setAttribute('aria-label','聊天名称');
   const submit=row('保存','check',async()=>{
     const name=field.value.trim();if(!name||submit.disabled)return;
@@ -4510,7 +4524,7 @@ function renameChat(c){
     }catch(e){status.textContent=e.message;submit.disabled=false;field.disabled=false}
   });
   field.onkeydown=e=>{if(e.key==='Enter'&&!isCompositionKey(e))submit.click()};
-  body.append(field,submit,status);field.select()
+  status.setAttribute('role','status');body.append(field,submit,status);field.focus();field.select()
 }
 
 const loadedVersion=document.querySelector('meta[name="client-version"]')?.content;
