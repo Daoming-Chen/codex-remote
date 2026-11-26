@@ -9,7 +9,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
   const browser = await chromium.launch(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
   try {
-    const page = await browser.newPage({ serviceWorkers: 'block' });
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: {width: 1920, height: 1078} });
     const scope = 'a'.repeat(64);
     const host = { name: '同名主机', deviceId: 'first', scope, online: true };
     const second = {...host, deviceId: 'second', scope: 'b'.repeat(64), online: false};
@@ -126,16 +126,36 @@ test('select an authorized host, preview and remove attachments, retain the draf
     assert.equal(await draft.inputValue(), '保留这份草稿');
     second.online = true;
     const directory = 'http://localhost:49002/devices';
-    await page.goto(directory);
+    await page.getByRole('link', {name: '切换设备，当前为 '+host.name}).click();
     await page.getByRole('button', {name: /second.*在线/}).click();
     await page.waitForURL('**/devices/' + second.scope + '/');
     assert.equal(await draft.inputValue(), '');
     await draft.fill('第二台主机的草稿');
-    host.name = '改名 & <主机> "__DICTATION_ENGINE__"';
+    host.name = '改名 & <主机> "__DICTATION_ENGINE__"' + '很长的设备名'.repeat(20);
     await page.goto(directory);
     await page.getByRole('button', {name: /改名/}).click();
     await page.waitForURL('**/devices/' + scope + '/');
     assert.equal(await page.locator('.hostline [data-receiver-name]').textContent(), host.name);
+    const hostLink = page.getByRole('link', {name: '切换设备，当前为 '+host.name});
+    const project = page.getByRole('button', {name: '选择远程项目'});
+    for (const width of [1920, 820, 390]) {
+      await page.setViewportSize({width, height: 1078});
+      if(width === 1920) await page.waitForFunction(() => {
+        const box = document.getElementById('composer')!.getBoundingClientRect();
+        return Math.abs(box.x - 745) <= 2 && Math.abs(box.bottom - 1062) <= 2;
+      }, undefined, {timeout: 5000});
+      const [linkBox, projectBox, composerBox] = await Promise.all([hostLink.boundingBox(), project.boundingBox(), page.locator('#composer').boundingBox()]);
+      assert(linkBox && projectBox && composerBox);
+      assert(linkBox.x + linkBox.width <= projectBox.x && projectBox.x + projectBox.width <= width);
+      if(width === 1920){
+        assert(Math.abs(composerBox.x - 745) <= 2);
+        assert(Math.abs(composerBox.width - 736) <= 2);
+        const modelBox = await page.locator('#model-picker').boundingBox();
+        assert(modelBox && modelBox.x > composerBox.x + composerBox.width / 2);
+        assert(modelBox.x + modelBox.width <= composerBox.x + composerBox.width);
+        assert(linkBox.y < composerBox.y && Math.abs(composerBox.y + composerBox.height - 1062) <= 2);
+      }
+    }
     assert.equal(await page.locator('#dictate').getAttribute('data-engine'), 'windows');
     assert.equal(await draft.inputValue(), '保留这份草稿');
     await page.goto(directory);

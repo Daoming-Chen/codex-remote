@@ -155,6 +155,10 @@ dialog.model-menu::backdrop{background:transparent}
 .empty .welcome h1{max-width:100%;text-align:center;font-size:20px;line-height:1.2;font-weight:400;letter-spacing:normal;overflow-wrap:anywhere}
 .welcome .hero-project{display:inline;max-width:100%;padding:0;font:inherit;color:inherit;white-space:normal;overflow-wrap:anywhere;text-decoration:underline dotted var(--muted) 1px;text-underline-offset:4px}
 .welcome .hero-project:hover{background:transparent;color:var(--muted)}
+#composer-device{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:50%;color:var(--muted);font-size:12px;text-decoration:none;border-radius:4px}
+#composer-device i{flex:none}
+#composer-device bdi{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#composer-device:hover{color:var(--text)}
 .hostline>button{display:inline-flex;min-width:0;align-items:center;gap:6px;padding:0;color:var(--muted)}
 .empty .hostline > button { max-inline-size: 14rem; overflow: hidden; }
 .empty .hostline > button > i { flex: none; }
@@ -744,7 +748,7 @@ dialog.chat-search {
   #layout.empty .dock:has(#receiver-setup[hidden]) #prompt { flex: none; font-size: 14px; }
   [data-theme=dark] #layout.empty .welcome h1 { color: #fff; }
   [data-theme=dark] #layout.empty .dock:has(#receiver-setup[hidden]) .hostline { background: #282828; }
-  [data-theme=dark] #layout.empty .hostline > span { color: #dcdcdc; font-weight: 600; }
+  [data-theme=dark] #layout.empty .hostline #composer-device { color: #dcdcdc; font-weight: 600; }
   [data-theme=dark] #layout.empty .hostline button { color: #8d8d8d; }
   [data-theme=dark] #layout.empty #composer { background: #363636; border-color: #3a3a3a; }
 }

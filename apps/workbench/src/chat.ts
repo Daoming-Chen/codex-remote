@@ -15,6 +15,9 @@ async function deviceFetch(path,options){
 let receiverName=document.querySelector('meta[name="receiver-name"]')?.content||'远程主机';
 function renderReceiverName(){
   for(const label of document.querySelectorAll('[data-receiver-name]'))label.textContent=receiverName;
+  const device=$('composer-device');
+  device.setAttribute('aria-label','切换设备，当前为 '+receiverName);
+  device.title='切换设备 · '+receiverName;
   const avatar=document.querySelector('.account .avatar');
   if(avatar)avatar.textContent=Array.from(receiverName)[0]?.toLocaleUpperCase()||''
 }
