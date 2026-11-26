@@ -29,6 +29,8 @@ public final class ReceiverActivity extends Activity {
     private AlertDialog scanDialog;
     private File root;
     private String origin,token,screen="";
+    private static final String SAVED_PATH="workbenchPath";
+    private String workbenchPath="/";
     private boolean loaded, cookiePending, cookieFailed;
     private boolean pageReady, authorizationReady;
     public static final class DraftStore {
@@ -61,6 +63,7 @@ public final class ReceiverActivity extends Activity {
     }
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
+        if(state!=null)workbenchPath=restorePath(state.getString(SAVED_PATH));
         root=getFilesDir();
         android.content.SharedPreferences prefs=getSharedPreferences("receiver",MODE_PRIVATE);
         int port=prefs.getInt("port",0);
@@ -272,7 +275,7 @@ public final class ReceiverActivity extends Activity {
             }
             loaded=true;
             web.setVisibility(View.VISIBLE);
-            web.loadUrl(origin+"/");
+            web.loadUrl(origin+workbenchPath);
         });
     }
     private void showCookieRetry(){
@@ -297,6 +300,19 @@ public final class ReceiverActivity extends Activity {
         code.setContentDescription("Remote 设备授权二维码");
         scanDialog=new AlertDialog.Builder(this).setTitle("扫码授权此设备").setView(code)
             .setNegativeButton("关闭",null).show();
+    }
+    private static String restorePath(String path){
+        if("/devices".equals(path)||(path!=null&&path.matches("/devices/[0-9a-f]{64}/")))return path;
+        return "/";
+    }
+    @Override protected void onSaveInstanceState(Bundle state){
+        super.onSaveInstanceState(state);
+        String url=web.getUrl();
+        if(url!=null){
+            Uri uri=Uri.parse(url);
+            if(isWorkbenchOrigin(uri))workbenchPath=restorePath(uri.getEncodedPath());
+        }
+        state.putString(SAVED_PATH,workbenchPath);
     }
     @Override protected void onResume(){super.onResume();web.onResume();handler.post(refresh);}
     @Override protected void onPause(){handler.removeCallbacks(refresh);web.onPause();super.onPause();}
