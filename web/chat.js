@@ -1823,8 +1823,8 @@ function select(c,restore=false){
     draftSelections.set(previous,{start:input.selectionStart,end:input.selectionEnd,
       direction:input.selectionDirection,scrollTop:input.scrollTop})
   }
-  if(!$('plugin-page').hidden)showPluginDestination(false);
-  rememberReadingPosition();
+  if($('plugin-page').hidden)rememberReadingPosition();
+  else showPluginDestination(false);
   let index=entry?.index||0;
   if(!entry){
     navEnd=index=0;browserHistory.replaceState({codexChat:{id:c.id,index,deviceScope}},'')
