@@ -12,7 +12,12 @@ out.parent.mkdir(exist_ok=True)
 with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
     manifest = json.loads((root / "scripts/web-files.json").read_text(encoding="utf-8-sig"))
     for name in manifest:
-        if not name.isascii():
+        if name == "start.sh":
+            item = zipfile.ZipInfo(name)
+            item.create_system = 3
+            item.external_attr = 0o100755 << 16
+            archive.writestr(item, (web/name).read_bytes().replace(b"\r\n", b"\n"), compress_type=zipfile.ZIP_DEFLATED)
+        elif not name.isascii():
             item = zipfile.ZipInfo(name)
             encoded = name.encode()
             item.extra = struct.pack("<HHBI", 0x7075, len(encoded)+5, 1, zlib.crc32(encoded))+encoded
