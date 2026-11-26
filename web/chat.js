@@ -2004,8 +2004,9 @@ function sendsWithEnter(value){
 function updateEnterHint(){
   const prompt=$('prompt');prompt.enterKeyHint=sendsWithEnter(prompt.value)?'send':'enter'
 }
-function settings(){
-  const body=modal('设置');
+function settings(restore=false){
+  const body=openSidePage('settings','设置',restore===true);
+  if(!body)return;
   if(mobile.matches)body.append(row('定时任务','scheduled',()=>scheduledView()),row('账号用量','usage-ring',accountUsage),row('插件','plugins',()=>pluginsView()));
   const label=element('label','preference-label','发送快捷键'),select=element('select','field');
   select.id='composer-enter-behavior';label.htmlFor=select.id;
@@ -2018,8 +2019,24 @@ function settings(){
     body.append(element('div','preference-label','发送快捷键'),element('p','quiet','回车换行。点发送按钮，或用外接键盘按 Ctrl + Enter 发送。'))
   }else body.append(label,select);
   body.append(element('div','preference-label','外观'));
-  for(const [v,t,i] of [['system','跟随系统','monitor'],['light','浅色','sun'],['dark','深色','moon']])
-    body.append(row(t,i,()=>{db.theme=v;theme();save();settings()},db.theme===v?'已选择':''))
+  const themes=element('div','settings-themes');
+  body.append(themes);
+  function updateThemeSelection(){
+    for(const choice of themes.children){
+      const selected=choice.dataset.theme===db.theme;
+      choice.setAttribute('aria-pressed',String(selected));
+      choice.querySelector('small').textContent=selected?'已选择':''
+    }
+  }
+  for(const [value,text,iconName] of [['system','跟随系统','monitor'],['light','浅色','sun'],['dark','深色','moon']]){
+    const choice=row(text,iconName,()=>{db.theme=value;theme();save();updateThemeSelection()});
+    choice.dataset.theme=value;
+    choice.append(element('small'));
+    themes.append(choice)
+  }
+  updateThemeSelection();
+  const heading=body.querySelector('h1');heading.tabIndex=-1;heading.focus({preventScroll:true})
+
 }
 function exportMessage(m){
   if(m.role==='steps')return [m.explanation,...m.steps.map(s=>'- ['+(s.status==='completed'?'x':' ')+'] '+s.step)].filter(Boolean).join('\n');
@@ -2501,7 +2518,7 @@ function showPluginDestination(open,destination='plugins'){
   page.hidden=!open;
   $('layout').classList.toggle('plugins-open',open);
   syncWorkWidth();
-  for(const button of $('app-rail').querySelectorAll('[data-action="home"],[data-action="plugins"],[data-action="scheduled"]')){
+  for(const button of $('app-rail').querySelectorAll('[data-action="home"],[data-action="plugins"],[data-action="scheduled"],[data-action="settings"]')){
     if(button.dataset.action===(open?destination:'home'))button.setAttribute('aria-current','page');
     else button.removeAttribute('aria-current')
   }
@@ -2509,7 +2526,8 @@ function showPluginDestination(open,destination='plugins'){
 }
 function restoreDestination(destination){
   if(destination==='plugins')pluginsView(true);
-  if(destination==='scheduled')scheduledView(true)
+  if(destination==='scheduled')scheduledView(true);
+  if(destination==='settings')settings(true)
 }
 function openSidePage(destination,title,restore){
   closeDialog();
