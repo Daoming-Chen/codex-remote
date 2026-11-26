@@ -2560,6 +2560,7 @@ function showFirstTextTiming(body,timing){
   const seconds=ms=>(Math.round(ms/10)/100).toFixed(2)+' 秒';
   body.append(element('h3','','最近有正文的网页轮次'),
     element('p','quiet','接收端受理到收到首段正文 · '+seconds(timing.total)));
+  if(timing.browserTotal!=null)body.append(element('p','quiet','前台发送到页面收到首段正文 · '+seconds(timing.browserTotal)));
   if(timing.startAck!=null&&timing.afterAck!=null)body.append(
     element('p','quiet','接收端受理到确认轮次启动 · '+seconds(timing.startAck)),
     element('p','quiet','确认轮次启动到收到首段正文 · '+seconds(timing.afterAck)));
@@ -3610,6 +3611,10 @@ async function confirmSubmission(c,id,firstAttempt){
 }
 let renderedModelLabel;
 const observedChats=new WeakMap();
+const foregroundSubmissions=new WeakMap();
+let foregroundRevision=0;
+document.addEventListener('visibilitychange',()=>{if(document.hidden)foregroundRevision++});
+window.addEventListener('pagehide',()=>{foregroundRevision++});
 async function poll(c,firstAttempt=false){
   const id=c.pending;if(!id||observedChats.get(c)===id)return;
   observedChats.set(c,id);
@@ -3621,7 +3626,14 @@ async function poll(c,firstAttempt=false){
       continue
     }
     if(j.observedTextAt!=null&&c.firstTextTiming?.job!==id){
-      const timing=firstTextTiming(j);if(timing)c.firstTextTiming={job:id,...timing}
+      const timing=firstTextTiming(j);
+      if(timing){
+        const sent=foregroundSubmissions.get(c);
+        if(sent?.id===id&&current()===c&&!document.hidden&&sent.selection===selectionRevision&&sent.foreground===foregroundRevision)
+          timing.browserTotal=Math.round(performance.now()-sent.started);
+        c.firstTextTiming={job:id,...timing};
+        foregroundSubmissions.delete(c)
+      }
     }
     if(Object.hasOwn(j,'threadServiceTier'))c.threadServiceTier=j.threadServiceTier;
     const oldWait=localWaitLabel(c);
@@ -3692,6 +3704,7 @@ $('steer').onclick=()=>steer(current());
 $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}if(c.pending||c.activeTurn){await steer(c);return}if(readingFiles.has(c)||(!text&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const prompt=promptWithFiles(text,files);if(new TextEncoder().encode(prompt).length>16000){toast('单条消息最多 16 KB');return}
+  const foreground=document.hidden?null:{started:performance.now(),selection:selectionRevision,foreground:foregroundRevision};
   let native;
   try{native=await nativePermissions()}catch(error){toast(error.message);return}
   if(current()!==c||c.pending||c.activeTurn||c.archived||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
@@ -3709,6 +3722,7 @@ $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedD
   }
   document.dispatchEvent(new CustomEvent('draft-submitted',{detail:c.id}));
   const id=crypto.randomUUID();delete c.receiptUnknown;delete c.selectionDuringTurn;c.pending=id;c.turn=null;c.stopping=false;c.preview='';c.items=[];c.phase='正在发送…';c.error=null;const visible=[text,...files.map(f=>'📎 '+f.name)].filter(Boolean).join('\n');if(!c.messages.length)c.title=(text||files[0].name).slice(0,45);const images=files.filter(f=>f.url).map(f=>f.url);c.outbox={id,draft:submittedDraft,files,options:{approvalPolicy:c.approvalPolicy||"never",expectedThread:c.thread||null,parent:c.parent,cwd:c.cwd||null,projectId:c.projectId||null,sandbox:c.sandbox||'read-only',collaborationMode:c.collaborationMode||null,...turnModelOptions(c)}};const optimistic={role:'user',text:visible,images,submissionId:id};c.messages.push(optimistic);c.files=[];c.draft='';c.updated=Date.now();save();renderSidebarHistory();composer();messages();
+  if(foreground)foregroundSubmissions.set(c,{id,...foreground});
   await poll(c,true)
 };
 let firstDirectoryRequest, directoryHeadRequest, lastDirectorySignature, lastDirectoryCheck=0;
