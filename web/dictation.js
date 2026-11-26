@@ -91,9 +91,13 @@
         prompt.addEventListener('blur',restore);
         prompt.focus({preventScroll:true})
       }
-      prompt.setRangeText(text,start,end,'end');prompt.dispatchEvent(new Event('input'));
-      if(window.ReceiverKeyboard)prompt.setSelectionRange(start+text.length,start+text.length);
-      if(!prompt.hasAttribute('data-android-ime'))prompt.focus()
+      if(!prompt.hasAttribute('data-android-ime'))prompt.focus({preventScroll:true});
+      prompt.setSelectionRange(start,end);
+      // Use a native edit when possible so a single undo restores the original selection.
+      if(document.activeElement!==prompt||!document.execCommand('insertText',false,text)){
+        prompt.setRangeText(text,start,end,'end');
+        prompt.dispatchEvent(new Event('input',{bubbles:true}))
+      }
   }
   async function browserDictation(s){
     const Engine=window.SpeechRecognition||window.webkitSpeechRecognition;
