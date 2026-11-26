@@ -2831,6 +2831,7 @@ function sidebarNeighbor(delta){
 const commands=[
   {name:'在当前聊天中查找',icon:'search',keys:['f'],run:openThreadFind},
   {name:'添加本地文件',icon:'file-text',keys:['u'],run:()=>{closeDialog();$('file').click()}},
+  {name:'设置',icon:'sliders-horizontal',keys:[','],run:settings},
   {name:'已归档聊天',icon:'message-circle',keys:[],run:archives},
   {name:'新聊天',icon:'square-pen',keys:['n','shift+o'],run:start},
   {name:'搜索聊天',icon:'search',keys:[],run:search},
@@ -3003,7 +3004,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&!e.defaultPrevented&&!$('dialog').open&&$('layout').classList.contains('drawer')){
     e.preventDefault();toggleSidebar();return
   }
-  if(e.defaultPrevented||e.isComposing||e.getModifierState('AltGraph')||!(e.ctrlKey||e.metaKey))return;
+  if(e.defaultPrevented||isCompositionKey(e)||e.getModifierState('AltGraph')||!(e.ctrlKey||e.metaKey))return;
   const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
   if(key==='k'||key==='shift+p'){e.preventDefault();if(!e.repeat)commandMenu();return}
   if($('dialog').open)return;
