@@ -10,3 +10,21 @@ __pycache__/
 *.jks
 *.keystore
 .env*
+
+# Runtime files compiled by npm run build
+/web/*.js
+/web/*.mjs
+/web/devices.html
+/android/embedded.mjs
+/android/expand-regex.cjs
+/web/index.html
+/web/chat.css
+/web/icons.svg
+/web/codex.png
+/web/app.webmanifest
+/web/launcher-192.png
+/web/launcher-512.png
+/web/daemon-turn.py
+/web/follow-events.py
+/web/thread-api.py
+/web/dictation.ps1

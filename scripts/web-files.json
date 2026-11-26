@@ -17,6 +17,7 @@
   "icons.svg",
   "index.html",
   "markdown.js",
+  "device-directory.mjs",
   "server.mjs",
   "thread-api.py",
   "transport.mjs",

@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "skipLibCheck": true
+  },
+  "include": [
+    "apps/workbench/src/**/*.tsx",
+    "scripts/build.ts",
+    "apps/workbench/offline/reconnect.ts",
+    "apps/workbench/src/voice-capture.ts",
+    "packages/protocol/**/*.ts",
+    "apps/receiver/src/device-directory.mts",
+    "apps/workbench/src/markdown.ts",
+    "tests/*.test.ts"
+  ]
+}

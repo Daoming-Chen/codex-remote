@@ -37,8 +37,8 @@ const androidStrictUtf8={decode(bytes){
    data=data.decode().replace('<p>在这台设备的接收端解压目录运行以下命令，按提示完成 Remote 设备授权。</p><code>node transport.mjs --authorize</code>','<p>点击上方的设备授权按钮，授权后即可发送。</p>').encode()
   if name=='receiver-worker.js':
    page=data.decode()
-   start=page.index("const guide=document.querySelector('#guide');")
-   end=page.index('let timer,checking=false',start)
+   start=page.index("const guide=")
+   end=page.index('let timer',start)
    page=page[:start]+page[end:]
    data=page.replace('请从接收端目录重新启动工作台。','正在等待应用内接收端启动。如果一直没有恢复，请关闭并重新打开应用。').encode()
   if name=='server.mjs':

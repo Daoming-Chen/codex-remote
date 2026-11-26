@@ -53,7 +53,7 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
     assert [row[1] for row in listeners if row[-1]==str(child.pid) and row[2]=='0.0.0.0:0']==[f'127.0.0.1:{port}']
    try:urllib.request.urlopen(url);raise AssertionError('missing cookie accepted')
    except urllib.error.HTTPError as e:assert e.code==403
-   assert b'id="devices"' in urllib.request.urlopen(urllib.request.Request(url,headers={'Cookie':'receiver=isolated-cookie'})).read()
+   assert (app/'devices.html').read_bytes() == urllib.request.urlopen(urllib.request.Request(url,headers={'Cookie':'receiver=isolated-cookie'})).read()
    for endpoint in ('api/client-version','chat.js'):
     try:urllib.request.urlopen(url+endpoint);raise AssertionError('missing cookie accepted')
     except urllib.error.HTTPError as e:assert e.code==403

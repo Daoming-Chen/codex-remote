@@ -1,3 +1,4 @@
+import { createDeviceDirectory, deviceNameEvent } from './device-directory.mjs';
 import {win32,posix} from 'node:path';
 import {createServer} from 'node:http';
 import {execFile} from 'node:child_process';
@@ -19,56 +20,7 @@ if(!Number.isInteger(port)||port<1||port>65535)throw Error('端口无效');
 const origin='http://127.0.0.1:'+port;
 
 const deviceContexts=new Map();
-const knownDevices=new Map();
-let directoryCheckedAt=0,deviceListRequest,accessTimer;
-const scopedStreams=new Map();
-function watchScopedStream(scope,res,isDirectory){
-  let streams=scopedStreams.get(scope);
-  if(!streams){streams=new Map();scopedStreams.set(scope,streams)}
-  streams.set(res,isDirectory);
-  res.once('close',()=>{
-    streams.delete(res);
-    if(!streams.size)scopedStreams.delete(scope);
-    if(!scopedStreams.size){clearInterval(accessTimer);accessTimer=null}
-  });
-  if(!accessTimer)accessTimer=setInterval(()=>{
-    if(Date.now()-directoryCheckedAt>=30000)void authorizedDeviceList().catch(()=>{})
-  },30000).unref()
-}
-function closeUnavailableStreams(revokedOnly){
-  for(const [scope,streams] of scopedStreams){
-    if(revokedOnly&&knownDevices.has(scope))continue;
-    for(const [res,isDirectory] of streams){
-      if(revokedOnly&&isDirectory&&res.headersSent&&!res.writableEnded)
-        res.end('event: device-access-lost\ndata: revoked\n\n');
-      else res.destroy()
-    }
-  }
-}
-function deviceNameEvent(name){
-  return 'event: device-name\ndata: '+JSON.stringify(name||'所选设备')+'\n\n'
-}
-async function authorizedDeviceList(){
-  if(!deviceListRequest)deviceListRequest=listReceiverDevices().then(devices=>{
-    const previous=new Map(knownDevices);
-    knownDevices.clear();
-    for(const device of devices){
-      device.scope=createHash('sha256').update(device.deviceId).digest('hex');
-      knownDevices.set(device.scope,device);
-      if(previous.get(device.scope)?.name!==device.name){
-        for(const [res,isDirectory] of scopedStreams.get(device.scope)||[]){
-          if(isDirectory&&res.headersSent&&!res.writableEnded){
-            if(res.writableNeedDrain)res.end();else res.write(deviceNameEvent(device.name))
-          }
-        }
-      }
-    }
-    directoryCheckedAt=Date.now();closeUnavailableStreams(true);return devices
-  }).catch(error=>{
-    directoryCheckedAt=0;closeUnavailableStreams(false);throw error
-  }).finally(()=>{deviceListRequest=null});
-  return deviceListRequest
-}
+const hostDirectory=createDeviceDirectory(listReceiverDevices);
 const deviceScope=deviceId?createHash('sha256').update(deviceId).digest('hex'):'';
 if(deviceId)bindReceiverDevice(deviceId);
 const stateRoot=new URL('./state/',import.meta.url);
@@ -1097,13 +1049,13 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const route=req.url.match(/^\/devices\/([0-9a-f]{64})(\/[^#]*)$/);
       if(route){
         const [,scope,path]=route;
-        if(path==='/'||Date.now()-directoryCheckedAt>30000){
-          try{await authorizedDeviceList()}catch(error){
+        if(path==='/'||hostDirectory.stale()){
+          try{await hostDirectory.list()}catch(error){
             if(req.method!=='GET'||path!=='/')throw error;
             res.writeHead(303,{Location:'/devices#directory-unavailable','Cache-Control':'no-store'});return res.end()
           }
         }
-        const device=knownDevices.get(scope);
+        const device=hostDirectory.devices.get(scope);
         if(path==='/'&&(!device||device.online===false)){
           res.writeHead(303,{Location:'/devices','Cache-Control':'no-store'});return res.end()
         }
@@ -1113,10 +1065,10 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         if(!context){context=import(url.href);deviceContexts.set(scope,context)}
         req.url=path;
         const handler=await context;
-        if(!knownDevices.has(scope)){res.setHeader('X-Receiver-Device-Access','revoked');return json(403,{error:'当前账号无法访问此设备'})}
+        if(!hostDirectory.devices.has(scope)){res.setHeader('X-Receiver-Device-Access','revoked');return json(403,{error:'当前账号无法访问此设备'})}
         if(req.method==='GET'&&(path==='/api/directory-events'||path.startsWith('/api/thread-events/')||/^\/api\/turn\/[^/]+\/events$/.test(path)))
-          watchScopedStream(scope,res,path==='/api/directory-events');
-        return await handler.handleRequest(req,res,knownDevices.get(scope).name||'所选设备')
+          hostDirectory.watch(scope,res,path==='/api/directory-events');
+        return await handler.handleRequest(req,res,hostDirectory.devices.get(scope).name||'所选设备')
       }
       if(req.url.startsWith('/api/')&&!['/api/devices','/api/client-version'].includes(req.url))return json(409,{error:'请先选择设备'});
       if(req.method==='GET'&&(req.url==='/'||req.url==='/devices')){
@@ -1126,7 +1078,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     if(req.method==='POST'&&req.url==='/api/devices'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
-      return json(200,{devices:await authorizedDeviceList()})
+      return json(200,{devices:await hostDirectory.list()})
     }
     if(req.method==='GET'&&req.url==='/api/directory-events'){
       if(req.headers['sec-fetch-site']!=='same-origin')return json(403,{error:'无效订阅'});

@@ -698,7 +698,10 @@ function attachmentImage(url,name='图片附件'){
   const img=element('img','attachment-image');img.src=url;img.alt=name;
   const trigger=element('button','attachment-preview');trigger.type='button';
   trigger.setAttribute('aria-label','查看'+name);trigger.setAttribute('aria-haspopup','dialog');trigger.append(img);
-  trigger.onclick=()=>{
+  trigger.onclick=()=>openAttachmentPreview(url,name);
+  return trigger
+}
+function openAttachmentPreview(url: string,name: string){
     const body=modal(name),dialog=$('dialog');dialog.classList.add('image-viewer');
     const viewport=element('div','image-viewport'),full=element('img');
     full.alt=name;full.src=url;viewport.append(full);
@@ -719,27 +722,12 @@ function attachmentImage(url,name='图片附件'){
     }
     zoom.onclick=toggleSize;full.onclick=toggleSize;
     body.append(viewport,zoom)
-  };
-  return trigger
 }
 function renderProjectName(c){
   for(const name of document.querySelectorAll('.project-name')){name.textContent=!c.cwd&&!c.projectId&&name.closest(".hostline")?"选择项目":projectName(c.cwd,c.projectId);name.title=c.cwd||name.textContent}
   const title=$('home-title'),project=hostProject(c.cwd,c.projectId);
   const label=c.projectId&&(project?.name?.trim()||projectFolder(c.cwd));
-  if(!label){
-    if(title.textContent!=='我们要构建什么？')title.textContent='我们要构建什么？';
-    return
-  }
-  let select=title.querySelector('button');
-  if(!select){
-    select=element('button','hero-project');select.type='button';select.dataset.action='project';
-    select.setAttribute('aria-haspopup','dialog');
-    title.replaceChildren(document.createTextNode(''),select,document.createTextNode(''))
-  }
-  select.textContent=label;select.title=c.cwd||label;
-  const build=project?.hasGitRoot;
-  title.firstChild.data=build?'你想让我们在 ':'我们应该在';
-  title.lastChild.data=build?' 中构建什么？':'中做些什么？'
+  WorkbenchComponents.renderWelcome(title,{project:label,cwd:c.cwd,hasGitRoot:project?.hasGitRoot})
 }
 function archiveComposer(c){
   $('composer').hidden=!!c.archived;$('archive-notice').hidden=!c.archived;
@@ -851,7 +839,10 @@ function renderDraft(chat){
   if(input.value!==value)input.value=value;
   renderedDraftChat=chat.id
 }
-function composer(){const c=current();archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();$('attachment').replaceChildren();for(const file of c.files){const chip=element('div','chip');if(file.remotePath)chip.title=(''+receiverName+' · ')+file.remotePath;chip.append(file.url?attachmentImage(file.url,file.name):icon(file.directory?'folder-open':'file-text'),element('span','',file.name),btn('移除 '+file.name,'x',()=>{c.files=c.files.filter(f=>f!==file);save();composer()}));$('attachment').append(chip)}resize()}
+function composer(){const c=current();archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();WorkbenchComponents.renderAttachments($('attachment'),{
+    files:c.files,host:receiverName,preview:openAttachmentPreview,
+    remove(file){c.files=c.files.filter(item=>item!==file);save();composer()}
+  });resize()}
 let readingReply=null;
 function stopReadingReply(){
   const active=readingReply;

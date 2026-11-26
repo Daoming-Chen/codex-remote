@@ -7,7 +7,9 @@
 安装 Node.js（已验证 24.16.0）后，在仓库根目录执行：
 
 ```sh
+npm ci
 npm ci --prefix web/vendor
+npm run build
 ```
 
 Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打开 Remote 授权页和本机工作台。默认地址为 `http://127.0.0.1:47831/`。从设备列表选择在线主机，之后可在连接信息里切换设备。浏览器草稿和接收服务的任务记录按设备 ID 隔离。主机需已安装并授权可用的 ds-harness-remote 和 Codex。详细步骤见 [使用说明](web/使用说明.txt)。
@@ -16,15 +18,26 @@ Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打�
 
 | 目录 | 内容 |
 | --- | --- |
-| `web/` | 浏览器工作台、Node 接收服务、Remote 连接适配与主机辅助脚本 |
+| `apps/workbench/src/` | TypeScript 工作台、Preact 设备选择页、首页标题与附件栏 |
+| `apps/receiver/src/` | Node 接收服务与 Remote 传输适配 |
+| `apps/workbench/public/` | 工作台 HTML、样式、图标及安装清单 |
+| `apps/host/` | 在 Codex 主机运行的 Python 辅助脚本 |
+| `packages/protocol/` | 设备目录的共享类型与校验 |
+| `web/` | Web 接收端运行目录，构建时生成脚本并复制静态资源 |
 | `web/vendor/` | 当前适配的 ds-harness-remote SDK 快照、上游许可及 npm 锁文件 |
 | `android/` | WebView、原生输入和生命周期处理、嵌入式 Node 入口、JNI 与测试包构建脚本 |
 | `scripts/` | Web 分发包的文件清单和构建入口 |
 | `tests/` | Android 包内容、授权交接、回环监听与路由访问测试 |
 
+### 开发与验证
+
+修改 `apps/`、`packages/` 或 `android/src/` 中的源码后运行 `npm run build`。构建使用 TypeScript、esbuild 和 Preact，将页面依赖打进本地资源，运行时无需前端 CDN。设备选择页、首页标题和附件栏由 Preact 渲染。聊天流式更新、模型菜单和语音流程仍保留命令式实现。
+
+`npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、录音处理器、离线恢复页、构建脚本和浏览器测试。其余迁入 TypeScript 的控制器在构建时去除类型并检查生成脚本的语法。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览和草稿保留；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
+
 ## 构建 Web 包
 
-安装 Web 依赖后，在根目录运行 `python scripts/package_web.py`。产物为 `dist/Codex-Remote-Web.zip`。打包脚本按清单收集源码及锁定的运行依赖。SDK 对应的上游项目为 [ds-harness-remote](https://github.com/liguobao/ds-harness-remote)，许可见 [DSH-LICENSE](web/vendor/DSH-LICENSE)。
+安装依赖后，在根目录运行 `npm run package:web`。产物为 `dist/Codex-Remote-Web.zip`。打包脚本按清单收集源码及锁定的运行依赖。SDK 对应的上游项目为 [ds-harness-remote](https://github.com/liguobao/ds-harness-remote)，许可见 [DSH-LICENSE](web/vendor/DSH-LICENSE)。
 
 ## 构建 Android 测试包
 
