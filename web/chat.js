@@ -1939,13 +1939,13 @@ function chooseProject(path,projectId){
   c.cwd=path;c.projectId=projectId;select(c);$('prompt').focus()
 }
 let menuAnchor=null;
-function closeDialog(){
+function closeDialog(reason){
   const dialog=$('dialog');
   for(const animation of dialog.getAnimations())if(animation.id==='model-view-size')animation.cancel();
   menuAnchor?.setAttribute('aria-expanded','false');
   menuAnchor=null;
   $('model-picker').setAttribute('aria-expanded','false');
-  if(dialog.open)dialog.close();
+  if(dialog.open)dialog.close(reason==='outside-click'?reason:'');
   $('attach-menu').setAttribute('aria-expanded','false')
 }
 function positionComposerPopup(){
@@ -1976,7 +1976,7 @@ function modal(title,anchor=null){
 document.addEventListener('click',event=>{
   if(!menuAnchor||$('dialog').contains(event.target))return;
   const toggle=menuAnchor.contains(event.target);
-  closeDialog();
+  closeDialog('outside-click');
   if(toggle){event.preventDefault();event.stopPropagation()}
 },true);
 document.addEventListener('keydown',event=>{
@@ -3297,7 +3297,7 @@ function openCommandModels(range){
   promptBox.dispatchEvent(new Event('input',{bubbles:true}));
   const chat=current(),draft=promptBox.value;
   const restoreCaret=()=>{
-    if(current()===chat&&promptBox.value===draft&&!$('dialog').open){
+    if(current()===chat&&promptBox.value===draft&&!$('dialog').open&&$('dialog').returnValue!=='outside-click'){
       promptBox.focus();promptBox.setSelectionRange(range.start,range.start)
     }
   };
