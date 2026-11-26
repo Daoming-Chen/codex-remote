@@ -265,6 +265,22 @@ function showUnread(button,state){
   button.classList.add('thread-unread');
   button.setAttribute('aria-label',button.textContent+'，未读')
 }
+function localWaitLabel(chat){
+  if(chat?.pending){
+    const questions=Object.values(chat.inputRequests||{}).flat();
+    if(questions.some(q=>q?.commandReview||q?.fileReview))return '等待审批';
+    if(questions.length)return '等待回复';
+    return null
+  }
+  return chat?.activeTurn?chat.externalWait:null
+}
+function showSidebarWait(button,local,item){
+  const label=local?localWaitLabel(local):hostWaitLabel(item?.activeFlags);
+  if(!label)return;
+  const text=label==='等待回复'?'需要用户输入':label;
+  button.append(element('small','sidebar-wait',text));
+  button.setAttribute('aria-label',(button.getAttribute('aria-label')||button.title)+'，'+text)
+}
 function sidebarChatButton(title){
   const button=element('button','');
   button.title=title;
@@ -282,7 +298,7 @@ function renderSidebarHistory(){
   for(const item of pinned){
     const local=db.chats.find(c=>c.thread===item.thread),wrap=element('div','history-row'+(local===current()?' active':''));
     const button=sidebarChatButton(local?.title||item.title);button.onclick=()=>loadRemoteChat(item);wrap.append(button);
-    showUnread(button,local?.readState??item.readState);
+    showUnread(button,local?.readState??item.readState);showSidebarWait(button,local,item);
     wrap.append(btn('聊天选项','ellipsis',event=>options(local||item,event.currentTarget),'icon more'));pins.append(wrap)
   }
   const groups=new Map(),seen=new Set(),folded=new Set(db.foldedProjects||[]);
@@ -335,7 +351,7 @@ function renderSidebarHistory(){
     for(const item of visible){
       const wrap=element('div','history-row'+(item.local===current()?' active':'')),pick=sidebarChatButton(item.title);
       pick.dataset.thread=item.local?.thread||item.remote?.thread||'';pick.onclick=()=>item.local?openCachedChat(item.local):loadRemoteChat(item.remote);
-      showUnread(pick,(item.local||item.remote).readState);
+      showUnread(pick,(item.local||item.remote).readState);showSidebarWait(pick,item.local,item.remote);
       wrap.append(pick);wrap.append(btn('聊天选项','ellipsis',event=>options(item.local||item.remote,event.currentTarget),'icon more'));group.append(wrap)
     }
     const sources=project?[path,...project.roots.filter(root=>hostProject(root)?.id===project.id)]:isProjectPath(path)?[path]:[];
@@ -2430,9 +2446,8 @@ function renderActivity(){
   }
   for(const c of db.chats){
     if(c.archived||!(c.pending||c.activeTurn))continue;
-    const key=c.thread||c.id,requests=Object.values(c.inputRequests||{}).flat();
-    const approval=requests.some(q=>q?.fileReview||q?.commandReview);
-    const label=approval?'等待审批':requests.length?'等待回复':c.activeTurn&&c.externalWait||entries.get(key)?.label||'进行中';
+    const key=c.thread||c.id;
+    const label=localWaitLabel(c)||entries.get(key)?.label||'进行中';
     entries.set(key,{title:c.title||'新聊天',label,open:()=>openCachedChat(c)})
   }
   const rows=$('activity-rows'),key=JSON.stringify([...entries].map(([id,r])=>[id,r.title,r.label]));
@@ -3552,6 +3567,7 @@ async function poll(c,firstAttempt=false){
       const timing=firstTextTiming(j);if(timing)c.firstTextTiming={job:id,...timing}
     }
     if(Object.hasOwn(j,'threadServiceTier'))c.threadServiceTier=j.threadServiceTier;
+    const oldWait=localWaitLabel(c);
     const nextRequests=j.status==='waiting'?j.inputRequests||{}:{};
     for(const token of Object.keys(c.inputRequests||{})){
       if(!Object.hasOwn(nextRequests,token))try{pageStorage.removeItem(questionDraftKey(c,token))}catch{}
@@ -3576,6 +3592,7 @@ async function poll(c,firstAttempt=false){
         c.error=j.notSubmitted?(''+receiverName+' 离线。消息未发送，恢复连接后可重新发送。'):'主机上的另一个 Codex 实例正在写入此会话。消息未发送。';
         if(current()===c)composer()
       }}else {c.items=j.progress?.items||[];c.preview=streamText(j);const labels={command_execution:'正在执行命令…',mcp_tool_call:'正在调用工具…',web_search:'正在搜索…',file_change:'正在处理文件…'};c.phase=j.reconnecting?(j.lastFollowFailure?.code==='REMOTE_HOST_OFFLINE'?(''+receiverName+' 离线，正在等待恢复…'):('正在重新连接 '+receiverName+'…')):j.status==='preparing'?('正在连接 '+receiverName+'…'):labels[j.progress?.item]||(j.progress?.started?'正在处理任务…':'正在启动 Codex…')}
+    if(oldWait!==localWaitLabel(c))renderSidebarHistory();
     if(c.outbox?.id===id&&(j.turn||!c.pending))delete c.outbox;
     const content=ordered??[c.preview,c.items,j.stepPlan,j.proposedPlans];
     const view=JSON.stringify([c.pending,c.turn,c.phase,content,c.error,c.messages.length,c.messages.at(-1)?.images?.length]);
