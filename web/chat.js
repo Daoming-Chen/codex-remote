@@ -275,7 +275,7 @@ function localWaitLabel(chat){
   return chat?.activeTurn?chat.externalWait:null
 }
 function showSidebarWait(button,local,item){
-  const label=local?localWaitLabel(local):hostWaitLabel(item?.activeFlags);
+  const label=local?.pending||local?.activeTurn?localWaitLabel(local):hostWaitLabel(item?.activeFlags);
   if(!label)return;
   const text=label==='等待回复'?'需要用户输入':label;
   button.append(element('small','sidebar-wait',text));
@@ -319,6 +319,7 @@ function renderSidebarHistory(){
     }
   }
   for(const item of db.hostIndex||[])if(!seen.has(item.thread)&&!pinIds.has(item.thread))add(groupKey(item),{remote:item,title:item.title,updated:item.updated*1000});
+  const directoryItems=new Map((db.hostIndex||[]).map(item=>[item.thread,item]));
   const activeGroup=current()&&groupKey(current());
   if(activeGroup&&!groups.has(activeGroup))groups.set(activeGroup,[]);
   const recent=groups.get('');
@@ -351,7 +352,7 @@ function renderSidebarHistory(){
     for(const item of visible){
       const wrap=element('div','history-row'+(item.local===current()?' active':'')),pick=sidebarChatButton(item.title);
       pick.dataset.thread=item.local?.thread||item.remote?.thread||'';pick.onclick=()=>item.local?openCachedChat(item.local):loadRemoteChat(item.remote);
-      showUnread(pick,(item.local||item.remote).readState);showSidebarWait(pick,item.local,item.remote);
+      showUnread(pick,(item.local||item.remote).readState);showSidebarWait(pick,item.local,item.remote||directoryItems.get(item.local?.thread));
       wrap.append(pick);wrap.append(btn('聊天选项','ellipsis',event=>options(item.local||item.remote,event.currentTarget),'icon more'));group.append(wrap)
     }
     const sources=project?[path,...project.roots.filter(root=>hostProject(root)?.id===project.id)]:isProjectPath(path)?[path]:[];

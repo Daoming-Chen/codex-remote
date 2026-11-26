@@ -89,7 +89,17 @@ function directoryChanged(rename){
     res.write('id: '+directoryRevision+'\ndata: changed\n\n')
   }
 }
-function notify(job){for(const send of subscribers.get(job.id)||[])send(job)}
+const directoryWaitFlags=new Map();
+function notify(job){
+  for(const send of subscribers.get(job.id)||[])send(job);
+  if(!job.thread)return;
+  const requests=job.status==='waiting'?Object.values(job.inputRequests||{}).flat():[];
+  const flag=requests.length?(requests.some(q=>q.commandReview||q.fileReview)?'waitingOnApproval':'waitingOnUserInput'):null;
+  if((directoryWaitFlags.get(job.thread)||null)===flag)return;
+  if(flag)directoryWaitFlags.set(job.thread,flag);
+  else directoryWaitFlags.delete(job.thread);
+  directoryChanged()
+}
 function streamJob(res,job){
   res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Accel-Buffering':'no'});
   let latest=job,timer,dirty=true,sentFirstText=false,lastWrite=Date.now();
@@ -1496,6 +1506,10 @@ export async function handleRequest(req,res,deviceName='所选设备'){
           data.items.unshift({thread:job.thread,title,cwd:job.cwd||'',updated:Math.floor(job.created/1000)});
           present.add(job.thread)
         }
+      }
+      if(!thread&&directoryWaitFlags.size){
+        const withWait=item=>directoryWaitFlags.has(item.thread)?{...item,activeFlags:[directoryWaitFlags.get(item.thread)]}:item;
+        data={...data,items:data.items.map(withWait),...(data.pinned?{pinned:data.pinned.map(withWait)}:{})}
       }
       if(thread){
         if(data.thread!==thread||!Array.isArray(data.messages))return json(502,{error:'主机返回的聊天记录与请求不匹配，请重新读取'});
