@@ -2262,7 +2262,7 @@ function anchorHeaderMenu(button){
   dialog.style.setProperty('--menu-left',Math.max(8,Math.min(rect.right-224,innerWidth-232))+'px');
   dialog.style.setProperty('--menu-top',rect.bottom+5+'px');
   const body=$('dialog-body');
-  body.onkeydown=event=>{
+  body.onkeydown??=event=>{
     const buttons=Array.from(body.querySelectorAll('button:not(:disabled)'));
     const index=buttons.indexOf(document.activeElement);
     if(!buttons.length)return;
