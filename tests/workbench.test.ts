@@ -18,7 +18,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
       ] } });
       if (path.endsWith('/api/models')) return route.fulfill({ json: {
         models: ['alpha', 'bravo', 'charlie', 'delta'].map(id => ({
-          id, name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
+          id, serviceTiers: [{id: 'fast', name: '快速'}], name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
         })),
         defaults: { model: 'alpha', effort: 'low' },
       } });
@@ -50,6 +50,18 @@ test('select an authorized host, preview and remove attachments, retain the draf
     assert.equal(await page.locator('[data-recent]:visible').first().getAttribute('aria-label'), 'Model delta');
     await modelSearch.press('Escape');
     await page.locator('#model-picker').click();
+    const speed = page.locator('.speed-trigger');
+    await speed.press('ArrowDown');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    assert.match(await speed.getAttribute('aria-label') || '', /快速/);
+    assert(await speed.evaluate(el => el === document.activeElement));
+    await speed.click();
+    await page.getByRole('menuitemradio', {name: '沿用主机设置'}).click();
+    assert.match(await speed.getAttribute('aria-label') || '', /沿用主机设置/);
+    await speed.click();
+    await page.keyboard.press('Escape');
+    assert(await speed.evaluate(el => el === document.activeElement));
     const effort = page.getByRole('slider', { name: '强度' });
     await effort.evaluate(input => {
       const slider = input as HTMLInputElement;

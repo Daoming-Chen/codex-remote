@@ -4292,45 +4292,18 @@ async function modelPicker(force=false,openList=false){
       const header=element('div','model-view-header');header.append(toggle);panel.append(header);
       if(fromList)animateViewEntry(header,-10,56);
       if(!nativePermissionMode&&model?.serviceTiers?.length){
-        const tiers=[{id:'',name:'沿用主机设置'},{id:'default',name:'标准'},...model.serviceTiers.filter(t=>t.id!=='default')];
-        const selected=tiers.find(t=>c.speedChoice?.model===model.id&&t.id===c.speedChoice.id)||tiers[0];
-        const menu=element('div','speed-flyout');menu.popover='auto';menu.setAttribute('role','menu');menu.setAttribute('aria-label','速度');
-        const speed=displayedSpeed(c,model),speedId=selected.id||speed?.id;
-        if(!selected.id&&speed)selected.description=speed.name;
-        const trigger=btn(['速度',selected.name,selected.description&&!selected.id?selected.description:null].filter(Boolean).join(' · '),tierIcon(speedId),openSpeed,'icon speed-trigger');
-        trigger.setAttribute('aria-haspopup','menu');trigger.setAttribute('aria-expanded','false');
-        trigger.dataset.fast=String(!!speedId&&speedId!=='default');
-        header.append(trigger,menu);
-        function openSpeed(){
-          if(menu.matches(':popover-open')){menu.hidePopover();return}
-          menu.showPopover();
-          positionSpeedMenu(menu);
-          menu.querySelector('[aria-checked=true]').focus()
-        }
-        menu.ontoggle=()=>trigger.setAttribute('aria-expanded',String(menu.matches(':popover-open')));
-        for(const tier of tiers){
-          const item=element('button','modal-row');item.type='button';item.setAttribute('role','menuitemradio');
-          item.setAttribute('aria-label',tier.name);item.setAttribute('aria-checked',String(tier===selected));
-          const label=element('span','',tier.name);item.append(label);
-          if(tier.description){label.append(element('span','model-default-description',tier.description));item.setAttribute('aria-description',tier.description)}
-          if(tier===selected)item.append(icon('check'));
-          item.onclick=()=>{
-            if(tier.id){
-              c.speedChoice={model:model.id,id:tier.id};
+        WorkbenchComponents.renderSpeedMenu(header,{
+          tiers:model.serviceTiers,choice:c.speedChoice?.model===model.id?c.speedChoice.id:undefined,
+          effective:displayedSpeed(c,model),iconFor:tierIcon,position:positionSpeedMenu,
+          select(id){
+            if(id){
+              c.speedChoice={model:model.id,id};
               c.effort=composerModel(c).effort||model.defaultEffort;c.model=model.id;c.modelName=model.name;
               c.selectedForNext=true;c.selectionDuringTurn=c.pending
             }else delete c.speedChoice;
-            menu.hidePopover();rememberConfiguration();save();modelLabel(c);simple(model);panel.querySelector('.speed-trigger').focus()
-          };
-          menu.append(item)
-        }
-        trigger.onkeydown=e=>{if(e.key==='ArrowDown'){e.preventDefault();openSpeed()}};
-        menu.onkeydown=e=>{
-          const options=Array.from(menu.children),i=options.indexOf(document.activeElement);
-          if(e.key==='Escape'||e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();menu.hidePopover();trigger.focus();return}
-          const next={ArrowDown:(i+1)%options.length,ArrowUp:(i+options.length-1)%options.length,Home:0,End:options.length-1}[e.key];
-          if(next!==undefined){e.preventDefault();options[next].focus()}
-        }
+            rememberConfiguration();save();modelLabel(c);simple(model);panel.querySelector('.speed-trigger').focus()
+          }
+        });
       }
       if(explicitlySelected(model?.id)&&projectDefaults?.defaults?.model){
         const reset=btn('重置为默认','reset-model',resetToDefault,'icon model-reset');

@@ -19,3 +19,4 @@ export function renderWelcome(container: HTMLElement, props: WelcomeProps) {
 export { sameConfiguration, recentModelChoices } from './models/configurations.js';
 export { renderModelSearch } from './models/ModelSearch.js';
 export { renderEffortControl } from './models/EffortControl.js';
+export { renderSpeedMenu } from './models/SpeedMenu.js';
