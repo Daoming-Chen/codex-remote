@@ -63,7 +63,10 @@ with zipfile.ZipFile(raw,'a',zipfile.ZIP_DEFLATED) as apk:
    src=(node_dist/'bin' if lib=='libnode.so' else a/'native')/abi/lib
    apk.write(src,'lib/'+abi+'/'+lib)
 aligned=build/'aligned.apk';run(bt/'zipalign.exe','-f','4',raw,aligned)
-ks=build/'local-test.jks'
+configured_key=os.environ.get('CODEX_REMOTE_TEST_KEYSTORE')
+ks=Path(configured_key).resolve() if configured_key else build/'local-test.jks'
+if configured_key and not ks.is_file():
+ raise SystemExit('CODEX_REMOTE_TEST_KEYSTORE must name an existing local test keystore')
 if not ks.exists():run(jdk/'bin/keytool.exe','-genkeypair','-keystore',ks,'-storepass','android','-keypass','android','-alias','receiver','-keyalg','RSA','-validity','3650','-dname','CN=Codex Remote Local Test')
 out=out_dir/'Codex-Remote-Android-test.apk'
 run(bt/'apksigner.bat','sign','--ks',ks,'--ks-pass','pass:android','--out',out,aligned)

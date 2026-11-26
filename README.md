@@ -38,6 +38,8 @@ Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打�
 | `ANDROID_NDK_HOME` | Windows 版 NDK r24 根目录 |
 | `NODE_MOBILE_ANDROID` | 含 bin/arm64-v8a/libnode.so 和 bin/x86_64/libnode.so 的目录 |
 
+首次构建会在 android/build/local-test.jks 创建测试签名。要覆盖安装先前交付的测试版，可通过 CODEX_REMOTE_TEST_KEYSTORE 指向原构建脚本生成的测试密钥文件。保留该文件在本机。
+
 ```sh
 npm ci --prefix android
 python android/build_native.py
