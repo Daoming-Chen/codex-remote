@@ -797,7 +797,7 @@ dialog.composer-menu{inset:auto auto var(--composer-bottom) var(--composer-left)
 
 dialog.sidebar-menu-above{bottom:var(--sidebar-menu-bottom);max-height:calc(100dvh - var(--sidebar-menu-bottom) - 8px)}
 
-dialog.rename-dialog{width:min(400px,calc(100vw - 32px))}
+dialog.rename-dialog{width:420px;max-width:92vw;border-radius:16px}
 .rename-dialog .quiet{margin:4px 0 12px}
 .rename-dialog [role=status]:empty{display:none}
 .rename-actions{display:flex;justify-content:flex-end;gap:8px}

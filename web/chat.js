@@ -4510,7 +4510,7 @@ function renameChat(c){
   $('dialog').classList.add('rename-dialog');
   const cancel=element('button','','取消'),actions=element('div','rename-actions');
   cancel.type='button';cancel.onclick=closeDialog;
-  field.value=c.title;field.maxLength=120;field.placeholder='添加标题…';field.setAttribute('aria-label','聊天名称');
+  field.value=c.title;field.maxLength=120;field.placeholder='添加标题…';field.setAttribute('aria-label','聊天标题');
   const submit=element('button','','保存');submit.type='button';
   submit.onclick=async()=>{
     const name=field.value.trim();if(!name||submit.disabled)return;
@@ -4528,7 +4528,7 @@ function renameChat(c){
   };
   field.onkeydown=e=>{if(e.key==='Enter'&&!isCompositionKey(e))submit.click()};
   status.setAttribute('role','status');actions.append(cancel,submit);
-  body.append(element('p','quiet','标题简短一些，方便辨认。'),field,status,actions);
+  body.append(element('p','quiet','保持简短且易于识别'),field,status,actions);
   field.oninput=()=>{submit.disabled=!field.value.trim()};field.oninput();field.focus();field.select()
 }
 
