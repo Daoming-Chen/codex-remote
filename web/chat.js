@@ -2013,6 +2013,7 @@ function updateEnterHint(){
 function settings(restore=false){
   const body=openSidePage('settings','设置',restore===true);
   if(!body)return;
+  body.append(row('键盘快捷键','sliders-horizontal',()=>keyboardShortcuts()));
   if(mobile.matches)body.append(row('定时任务','scheduled',()=>scheduledView()),row('账号用量','usage-ring',accountUsage),row('插件','plugins',()=>pluginsView()));
   const label=element('label','preference-label','发送快捷键'),select=element('select','field');
   select.id='composer-enter-behavior';label.htmlFor=select.id;
@@ -2544,7 +2545,7 @@ function showPluginDestination(open,destination='plugins'){
   $('layout').classList.toggle('plugins-open',open);
   syncWorkWidth();
   for(const button of $('app-rail').querySelectorAll('[data-action="home"],[data-action="plugins"],[data-action="scheduled"],[data-action="settings"]')){
-    if(button.dataset.action===(open?destination:'home'))button.setAttribute('aria-current','page');
+    if(button.dataset.action===(open?(destination==='keyboard-shortcuts'?'settings':destination):'home'))button.setAttribute('aria-current','page');
     else button.removeAttribute('aria-current')
   }
   page.replaceChildren()
@@ -2552,7 +2553,8 @@ function showPluginDestination(open,destination='plugins'){
 function restoreDestination(destination){
   if(destination==='plugins')pluginsView(true);
   if(destination==='scheduled')scheduledView(true);
-  if(destination==='settings')settings(true)
+  if(destination==='settings')settings(true);
+  if(destination==='keyboard-shortcuts')keyboardShortcuts(true)
 }
 function openSidePage(destination,title,restore){
   closeDialog();
@@ -2828,7 +2830,9 @@ function sidebarNeighbor(delta){
   const index=selected>=0?selected+delta:delta>0?0:rows.length-1;
   rows[index]?.querySelector('button')?.click()
 }
+const commandMenuKeys=['k','shift+p'];
 const commands=[
+  {name:'键盘快捷键',icon:'sliders-horizontal',keys:['/'],run:keyboardShortcuts},
   {name:'在当前聊天中查找',icon:'search',keys:['f'],run:openThreadFind},
   {name:'添加本地文件',icon:'file-text',keys:['u'],run:()=>{closeDialog();$('file').click()}},
   {name:'设置',icon:'sliders-horizontal',keys:[','],run:settings},
@@ -2842,6 +2846,23 @@ const commands=[
   {name:'下一个侧栏对话',icon:'message-circle',keys:['alt+]','alt+arrowright'],run:()=>sidebarNeighbor(1)},
   {name:'重命名聊天',icon:'square-pen',keys:['alt+r'],run:()=>renameChat(current())}
 ];
+function shortcutLabel(key){
+  const prefix=navigator.platform.startsWith('Mac')?'⌘':'Ctrl+';
+  return prefix+key.split('+').map(part=>part[0].toUpperCase()+part.slice(1)).join('+')
+}
+function keyboardShortcuts(restore=false){
+  const body=openSidePage('keyboard-shortcuts','键盘快捷键',restore===true);
+  if(!body)return;
+  const list=element('dl','shortcut-list');
+  for(const entry of [{name:'命令菜单',keys:commandMenuKeys},...commands]){
+    if(!entry.keys.length)continue;
+    const values=element('dd');
+    for(const key of entry.keys)values.append(element('kbd','',shortcutLabel(key)));
+    list.append(element('dt','',entry.name),values)
+  }
+  body.append(list);
+  const heading=body.querySelector('h1');heading.tabIndex=-1;heading.focus({preventScroll:true})
+}
 function openThreadFind(){
   const bar=$('thread-find'),input=$('find-text'),root=$('messages');
   if(!bar.hidden){input.focus();input.select();return}
@@ -2929,8 +2950,7 @@ function commandMenu(){
     results.replaceChildren();
     for(const cmd of commands.filter(c=>c.name.includes(field.value.trim()))){
       const shortcut=cmd.keys[0];
-      const prefix=navigator.platform.startsWith('Mac')?'⌘':'Ctrl+';
-      results.append(row(cmd.name,cmd.icon,()=>{closeDialog();cmd.run()},shortcut?prefix+shortcut.split('+').map(part=>part[0].toUpperCase()+part.slice(1)).join('+'):''))
+      results.append(row(cmd.name,cmd.icon,()=>{closeDialog();cmd.run()},shortcut?shortcutLabel(shortcut):''))
     }
     if(!results.children.length)results.append(element('p','quiet','没有匹配的命令'))
   }
@@ -3006,7 +3026,7 @@ document.addEventListener('keydown',e=>{
   }
   if(e.defaultPrevented||isCompositionKey(e)||e.getModifierState('AltGraph')||!(e.ctrlKey||e.metaKey))return;
   const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
-  if(key==='k'||key==='shift+p'){e.preventDefault();if(!e.repeat)commandMenu();return}
+  if(commandMenuKeys.includes(key)){e.preventDefault();if(!e.repeat)commandMenu();return}
   if($('dialog').open)return;
   const command=commands.find(cmd=>cmd.keys.includes(key));
   if(command){e.preventDefault();if(!e.repeat||key.startsWith('alt+arrow'))command.run()}
