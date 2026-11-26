@@ -2876,6 +2876,10 @@ const commands=[
   {name:'添加本地文件',icon:'file-text',keys:['u'],run:()=>{closeDialog();$('file').click()}},
   {name:'设置',icon:'sliders-horizontal',keys:[','],run:settings},
   {name:'已归档聊天',icon:'message-circle',keys:[],run:archives},
+  {name:'复制工作目录',icon:'copy',keys:['shift+c'],available:()=>!!current().cwd,run:async()=>{
+    try{await copyText(current().cwd);toast('已复制工作目录')}
+    catch{toast('浏览器未允许复制')}
+  }},
   {name:'新聊天',icon:'square-pen',keys:['n','shift+o'],run:start},
   {name:'搜索聊天',icon:'search',keys:[],run:search},
   {name:'切换项目侧栏',icon:'panel-left',keys:['b','shift+s'],run:()=>action('sidebar')},
@@ -3018,7 +3022,7 @@ function commandMenu(){
   field.placeholder='查找命令…';field.setAttribute('aria-label','查找命令');body.append(field,results);
   function render(){
     results.replaceChildren();
-    for(const cmd of commands.filter(c=>c.name.includes(field.value.trim()))){
+    for(const cmd of commands.filter(c=>(!c.available||c.available())&&c.name.includes(field.value.trim()))){
       const shortcut=cmd.keys[0];
       results.append(row(cmd.name,cmd.icon,()=>{closeDialog();cmd.run()},shortcut?shortcutLabel(shortcut):''))
     }
@@ -3098,7 +3102,7 @@ document.addEventListener('keydown',e=>{
   const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
   if(commandMenuKeys.includes(key)){e.preventDefault();if(!e.repeat)commandMenu();return}
   if($('dialog').open)return;
-  const command=commands.find(cmd=>cmd.keys.includes(key));
+  const command=commands.find(cmd=>cmd.keys.includes(key)&&(!cmd.available||cmd.available()));
   if(command){e.preventDefault();if(!e.repeat||key.startsWith('alt+arrow'))command.run()}
 });
 $('file').onchange=async()=>{
@@ -3592,6 +3596,7 @@ async function poll(c,firstAttempt=false){
     for(const message of j.supplements||[])addSupplement(c,message);
     const ordered=Array.isArray(j.order)?orderedMessages(c,j):null;
     if(ordered)orderedSnapshots.set(c,ordered);else orderedSnapshots.delete(c);
+    if(!c.cwd&&j.thread&&j.cwd){c.cwd=j.cwd;if(current()===c)renderProjectName(c)}
     if(j.thread)c.thread=j.thread;if(j.permissions)c.permissions=j.permissions;if(j.usage){c.usage=j.usage;if(!j.effective&&current()===c)renderContextUsage(c.usage)}if(j.effective){c.effective=j.effective;c.threadConfig=j.effective;if(c.selectionDuringTurn!==id)c.selectedForNext=false;if(current()===c)modelLabel(c)}if(j.status==='done'||j.status==='interrupted'){if(ordered?.length){
       commitOrderedMessages(c,ordered);
       if(j.status==='interrupted')c.messages.push({role:'status',turn:j.turn,status:'interrupted'})
