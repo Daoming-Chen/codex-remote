@@ -568,7 +568,7 @@ dialog.model-menu.model-command-menu {
 @media (min-width: 801px) {
   #app-rail { position: relative; }
   #app-rail::after {
-    content: ''; position: absolute; top: 17px; bottom: 8px; left: 100%; width: 1px;
+    content: ''; position: absolute; top: 17px; bottom: 8px; left: calc(100% + 1px); width: 1px; z-index: 1;
     background: var(--edge); pointer-events: none;
   }
   html[data-theme=dark] #app-rail::after { background: #312d30; }
@@ -813,3 +813,8 @@ dialog.rename-dialog{width:420px;max-width:92vw;border-radius:16px}
 .shortcut-search .field{flex:1;min-width:0;margin:0}
 .shortcut-search button{border-radius:8px;border:1px solid var(--edge);padding:6px 9px;white-space:nowrap}
 .shortcut-search button[aria-pressed=true]{background:var(--bubble);color:var(--text)}
+
+@media (min-width:801px){
+  html[data-theme=dark] #layout.empty main{border-bottom-left-radius:12px}
+  html[data-theme=dark] #layout.empty main::after{border:1px solid #212121;border-radius:inherit}
+}
