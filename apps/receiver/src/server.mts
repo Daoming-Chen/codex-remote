@@ -1,3 +1,4 @@
+import { renderWorkbenchPage } from './workbench-page.mjs';
 import { createDeviceDirectory, deviceNameEvent } from './device-directory.mjs';
 import {win32,posix} from 'node:path';
 import {createServer} from 'node:http';
@@ -1132,8 +1133,11 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const [name,type]=assets.get(req.url);
       const bytes=await readFile(new URL(name,import.meta.url));
       res.writeHead(200,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Frame-Options':'DENY','X-Content-Type-Options':'nosniff'});
-      const htmlDeviceName=deviceName.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
-      return res.end(name==='index.html'?bytes.toString().replaceAll('tim-SER',()=>htmlDeviceName).replace('<head>',()=>'<head><meta name="receiver-name" content="'+htmlDeviceName+'"><meta name="receiver-scope" content="'+deviceScope+'">').replace('__DICTATION_ENGINE__',process.platform==='win32'?'windows':'browser').replace('content="__CLIENT_VERSION__"','content="'+await clientVersion(bytes)+'"'):bytes)
+      if(name!=='index.html')return res.end(bytes);
+      return res.end(renderWorkbenchPage(bytes.toString(),{
+        deviceName,scope:deviceScope,version:await clientVersion(bytes),
+        dictationEngine:process.platform==='win32'?'windows':'browser'
+      }))
     }
     if(req.method==='POST'&&['/api/voice/start','/api/voice/status','/api/voice/heartbeat','/api/voice/stop'].includes(req.url))return await voiceRequest(req,json);
     if(req.method==='POST'&&req.url==='/api/dictation'){
@@ -1316,7 +1320,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const result=JSON.parse(await readRemote(probe,(route,native)=>{
         mode=route;nativeCodex=native
       }));
-      return json(200,{host:deviceId?deviceName:'tim-SER',checkedAt:Date.now(),mode,nativeCodex,lastDisconnect:ctx?.lastDisconnect?.(),appServerReady:result.ready===true})
+      return json(200,{host:deviceName,checkedAt:Date.now(),mode,nativeCodex,lastDisconnect:ctx?.lastDisconnect?.(),appServerReady:result.ready===true})
     }
     if(req.method==='POST' && req.url?.split('?')[0]==='/api/models'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});

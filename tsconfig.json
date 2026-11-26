@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "types": [
@@ -23,6 +24,7 @@
     "apps/workbench/src/voice-capture.ts",
     "packages/protocol/**/*.ts",
     "apps/receiver/src/device-directory.mts",
+    "apps/receiver/src/workbench-page.mts",
     "apps/workbench/src/markdown.ts",
     "tests/*.test.ts",
     "apps/workbench/src/dictation.ts",

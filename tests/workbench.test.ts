@@ -1,3 +1,4 @@
+import { renderWorkbenchPage } from '../apps/receiver/src/workbench-page.mts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -11,13 +12,15 @@ test('select an authorized host, preview and remove attachments, retain the draf
     const page = await browser.newPage({ serviceWorkers: 'block' });
     const scope = 'a'.repeat(64);
     const host = { name: '同名主机', deviceId: 'first', scope, online: true };
+    const second = {...host, deviceId: 'second', scope: 'b'.repeat(64), online: false};
     let turnRequests = 0;
     await page.route('http://localhost:49002/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith('/api/turn')) turnRequests++;
       if (path === '/api/devices') return route.fulfill({ json: { devices: [
-        host, { ...host, deviceId: 'second', scope: 'b'.repeat(64), online: false },
+        host, second,
       ] } });
+      if (path.endsWith('/api/native-capability')) return route.fulfill({json: {native: false}});
       if (path.endsWith('/api/models')) return route.fulfill({ json: {
         models: ['alpha', 'bravo', 'charlie', 'delta'].map(id => ({
           id, retirementAt: id === 'bravo' ? 1893456000 : undefined, description: '主机模型说明', serviceTiers: [{id: 'fast', name: '快速'}], name: 'Model ' + id, isDefault: id === 'alpha', efforts: ['low', 'medium', 'ultra'], defaultEffort: 'low',
@@ -25,7 +28,14 @@ test('select an authorized host, preview and remove attachments, retain the draf
         defaults: { model: 'alpha', effort: 'low' },
       } });
       if (path.includes('/api/')) return route.fulfill({ json: { items: [], models: [], projects: [] } });
-      const file = path === '/' ? 'devices.html' : path === '/devices/' + scope + '/' ? 'index.html' : path.slice(1);
+      const selected = [host, second].find(device => path === '/devices/' + device.scope + '/');
+      if (selected) {
+        const template = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
+        return route.fulfill({contentType: 'text/html', body: renderWorkbenchPage(template, {
+          deviceName: selected.name, scope: selected.scope, version: '0123456789abcdef', dictationEngine: 'windows',
+        })});
+      }
+      const file = path === '/' || path === '/devices' ? 'devices.html' : path.slice(1);
       await route.fulfill({ path: fileURLToPath(new URL('../web/' + file, import.meta.url)) });
     });
     await page.goto('http://localhost:49002/');
@@ -34,6 +44,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.waitForURL('**/devices/' + scope + '/');
     assert.equal(await page.evaluate(() => localStorage.getItem('codex-receiver-selected-device')), 'first');
     assert.equal(await page.locator('#home-title').innerText(), '我们要构建什么？');
+    assert.equal(await page.locator('.hostline [data-receiver-name]').textContent(), host.name);
     const panelToggle = page.getByRole('button', { name: '切换侧面板', exact: true });
     assert(await page.locator('#header-options').isHidden());
     await panelToggle.click();
@@ -113,6 +124,24 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.getByRole('button', { name: '移除 demo.png' }).click();
     assert.equal(await page.locator('#attachment .chip').count(), 0);
     assert.equal(await draft.inputValue(), '保留这份草稿');
+    second.online = true;
+    const directory = 'http://localhost:49002/devices';
+    await page.goto(directory);
+    await page.getByRole('button', {name: /second.*在线/}).click();
+    await page.waitForURL('**/devices/' + second.scope + '/');
+    assert.equal(await draft.inputValue(), '');
+    await draft.fill('第二台主机的草稿');
+    host.name = '改名 & <主机> "__DICTATION_ENGINE__"';
+    await page.goto(directory);
+    await page.getByRole('button', {name: /改名/}).click();
+    await page.waitForURL('**/devices/' + scope + '/');
+    assert.equal(await page.locator('.hostline [data-receiver-name]').textContent(), host.name);
+    assert.equal(await page.locator('#dictate').getAttribute('data-engine'), 'windows');
+    assert.equal(await draft.inputValue(), '保留这份草稿');
+    await page.goto(directory);
+    await page.getByRole('button', {name: /同名主机/}).click();
+    await page.waitForURL('**/devices/' + second.scope + '/');
+    assert.equal(await draft.inputValue(), '第二台主机的草稿');
   } finally { await browser.close() }
 });
 
