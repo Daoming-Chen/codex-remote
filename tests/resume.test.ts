@@ -152,6 +152,10 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
         resumed=true;releaseUpdates();
         return route.fulfill({status:202,json:{id:job}})
       }
+      if(stop&&resumed&&path===base+'/api/thread-interrupt/'+thread+'/live-turn'){
+        assert.equal(route.request().method(),'POST');
+        externalDone=true;return route.fulfill({status:202,json:{}})
+      }
       if(stop&&resumed&&path===base+'/api/threads'){
         const id=route.request().postDataJSON().thread;
         if(id){
@@ -160,7 +164,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
           const messages=id===thread?[inherited,{turn:'original-turn',role:'user',text:'原问题'},
             {turn:'other-client-turn',role:'assistant',text:'来自另一台设备的回复'}]:[inherited];
           if(id===thread&&externalDone)messages.push({turn:'live-turn',role:'assistant',text:'跨端最终回复'});
-          return route.fulfill({json:{thread:id,messages}})
+          return route.fulfill({json:{thread:id,messages,activeTurn:id===thread&&!externalDone?'live-turn':null}})
         }
       }
       if(stop&&path===base+'/api/thread-events/'+thread){
@@ -204,7 +208,12 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await messages.getByText('来自另一台设备的回复',{exact:true}).waitFor();
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
       const beforeFinal={parentReads,branchReads};
-      externalDone=true;
+      const panel=page.locator('.side-chat'),field=panel.locator('textarea');
+      await field.fill('保留侧聊草稿');
+      await field.press('Control+Enter');
+      assert.equal(externalDone,false);
+      await panel.getByRole('button',{name:'停止',exact:true}).click();
+      assert.equal(await field.inputValue(),'保留侧聊草稿');
       await messages.getByText('跨端最终回复',{exact:true}).waitFor();
       assert(branchReads>beforeFinal.branchReads);
       assert.equal(parentReads,beforeFinal.parentReads);

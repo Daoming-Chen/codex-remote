@@ -1020,7 +1020,7 @@ function mountSideChat(container,owner,chat){
   field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;fitEditor(field);save();sync()};
   field.onkeydown=event=>{
     if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
-      event.preventDefault();if(!event.repeat&&!chat.pending)form.requestSubmit()
+      event.preventDefault();if(!event.repeat&&!chat.pending&&!externalTurn)form.requestSubmit()
     }
   };
   transcript.setAttribute('aria-label','侧边聊天记录');status.setAttribute('role','status');
@@ -1047,6 +1047,7 @@ function mountSideChat(container,owner,chat){
   fitEditor(field);
   const entries=[];
   let externalRows=[],externalPreview=null,sideEvents=null,previewFrame=0;
+  let externalTurn=null,streamRevision=0;
   function sync(){
     if(!container.isConnected)return;
     syncSubscription();
@@ -1133,9 +1134,10 @@ function mountSideChat(container,owner,chat){
       attachments.hidden=!chat.files?.length
     }
     status.textContent=chat.error||(openingSideThreads.has(chat)?'正在关联主聊天…':chat.pending?chat.phase:'');
-    send.setAttribute('aria-label',chat.pending?'停止':'发送');send.title=send.getAttribute('aria-label');
-    send.replaceChildren(chat.pending?element('span','side-chat-stop'):icon('arrow-up'));
-    send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
+    const turn=chat.pending?chat.turn:externalTurn,running=!!(chat.pending||turn);
+    send.setAttribute('aria-label',running?'停止':'发送');send.title=send.getAttribute('aria-label');
+    send.replaceChildren(running?element('span','side-chat-stop'):icon('arrow-up'));
+    send.disabled=running?!turn||chat.stopping===turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
   }
   pendingQuestions(chat,questions);
   let readingHistory=false,refreshAgain=false;
@@ -1144,6 +1146,7 @@ function mountSideChat(container,owner,chat){
     if(chat.pending||!chat.thread||!owner.thread||!form.isConnected||!form.getClientRects().length||document.hidden)return;
     if(readingHistory){refreshAgain=true;return}
     const thread=chat.thread,sourceThread=owner.thread,parent=chat.parent,updated=chat.updated;
+    const revision=streamRevision;
     readingHistory=true;
     try{
       const signal=AbortSignal.timeout(30000);
@@ -1156,6 +1159,7 @@ function mountSideChat(container,owner,chat){
         inheritedTurns=new Set(source.messages.map(row=>row.turn));
         inheritedFrom=sourceThread
       }
+      if(revision===streamRevision)externalTurn=branch.activeTurn||null;
       externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inheritedTurns.has(row.turn)):[];
       if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
       const ends=new Map(chat.messages.map((row,index)=>[row.turn,index+1]));
@@ -1201,7 +1205,9 @@ function mountSideChat(container,owner,chat){
       if(!Array.isArray(packet))return;
       const [turn,id,delta]=packet;
       if(typeof turn!=='string'||typeof id!=='string')return;
-      if(delta===null)externalPreview={role:'assistant',turn,id,text:''};
+      if(delta===null){
+        streamRevision++;externalTurn=turn;externalPreview={role:'assistant',turn,id,text:''}
+      }
       else if(typeof delta==='string'&&externalPreview?.id===id&&externalPreview.turn===turn&&!externalPreview.disconnected)externalPreview.text+=delta;
       else return;
       if(!previewFrame)previewFrame=requestAnimationFrame(()=>{previewFrame=0;if(source===sideEvents)sync()})
@@ -1232,10 +1238,14 @@ function mountSideChat(container,owner,chat){
   visibleSideChat.ready=ready;
   form.onsubmit=async event=>{
     event.preventDefault();if(send.disabled)return;
-    if(chat.pending){
-      chat.stopping=chat.turn;sync();
+    if(chat.pending||externalTurn){
+      const local=!!chat.pending,turn=local?chat.turn:externalTurn;
+      const path=local?'/api/interrupt/'+chat.pending:'/api/thread-interrupt/'+chat.thread+'/'+turn;
+      chat.stopping=turn;sync();
       try{
-        const res=await deviceFetch('/api/interrupt/'+chat.pending,{method:'POST'});
+        const res=await deviceFetch(path,{method:'POST'});
+        if(!local&&(res.ok||res.status===409))await refreshHistory();
+        if(!local&&res.status===409&&externalTurn!==turn)return;
         if(!res.ok)throw Error((await res.json()).error||'停止失败')
       }catch(error){chat.stopping=false;toast(error.message);sync()}
       return
