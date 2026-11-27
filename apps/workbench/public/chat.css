@@ -64,8 +64,9 @@ dialog.model-menu::backdrop{background:transparent}
 .side-chat textarea{flex:none;width:100%;min-height:40px;resize:none;background:transparent;border:0;padding:2px 4px;outline:none}
 .side-chat > form:focus-within{border-color:var(--muted)}
 .side-attachments:not([hidden]){display:flex;flex-wrap:wrap;gap:4px}
-.side-chat > form > button{align-self:flex-end;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--send);color:var(--on-send)}
-.side-chat > form > button svg{width:18px;height:18px}.side-chat > form > button:disabled{opacity:.45}
+.side-chat-actions{display:flex;align-items:center;justify-content:space-between}
+.side-chat-actions > button[type=submit]{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--send);color:var(--on-send)}
+.side-chat-actions svg{width:18px;height:18px}.side-chat-actions button:disabled{opacity:.45}
 .side-chat-stop{width:10px;height:10px;background:currentColor;border-radius:2px}
 .side-unread{position:relative}
 .side-unread::before{content:"";position:absolute;left:16px;top:calc(50% - 9px);width:6px;height:6px;border-radius:50%;background:var(--blue,#3981ef);box-shadow:0 0 0 1px var(--bg);pointer-events:none}

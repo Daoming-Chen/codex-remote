@@ -1007,7 +1007,15 @@ function mountSideChat(container,owner,chat){
   const questions=element('div','side-chat-questions');
   const attachments=element('div','side-attachments');
   let renderedFiles;
-  form.append(attachments,field,send);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
+  const picker=$('file').cloneNode(false);picker.removeAttribute('id');
+  picker.onchange=()=>{
+    const batch=Array.from(picker.files);picker.value='';
+    void addTextFiles(batch,true,chat)
+  };
+  const actions=element('div','side-chat-actions');
+  send.type='submit';
+  actions.append(btn('添加本地文件','plus',()=>picker.click()),send);
+  form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   let last='';
   let displayedImages=[];
@@ -1045,7 +1053,7 @@ function mountSideChat(container,owner,chat){
     status.textContent=chat.error||(openingSideThreads.has(chat)?'正在关联主聊天…':chat.pending?chat.phase:'');
     send.setAttribute('aria-label',chat.pending?'停止':'发送');send.title=send.getAttribute('aria-label');
     send.replaceChildren(chat.pending?element('span','side-chat-stop'):icon('arrow-up'));
-    send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)
+    send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
   }
   pendingQuestions(chat,questions);
   visibleSideChat={chat,sync,questions,form};sync();
@@ -3622,6 +3630,7 @@ async function fitDraftImage(file,budget){
 }
 function offerImageCopies(chat,batch=null){
   const original=chat.files;
+  const active=()=>current()===chat||(visibleSideChat?.chat===chat&&visibleSideChat.form.isConnected&&!$('workbench').hidden);
   const body=modal('图片超过附件大小限制');
   const status=element('p','quiet','图片合计最多 256 KiB。可以缩小静态副本加入草稿，动图仅保留第一帧。');
   const confirm=row(batch?'压缩后加入草稿':'压缩草稿中的图片','image',async()=>{
@@ -3631,21 +3640,21 @@ function offerImageCopies(chat,batch=null){
       const images=files.filter(isDraftImage).sort((a,b)=>a.size-b.size),copies=new Map();
       let remaining=maxImageBytes-(batch?draftImageBytes(chat.files):0);
       for(const [i,file] of images.entries()){
-        if(current()!==chat||!body.contains(confirm)||!$('dialog').open)return;
+        if(!active()||!body.contains(confirm)||!$('dialog').open)return;
         const budget=Math.floor(remaining/(images.length-i));
         if(budget<=0)throw Error('剩余空间不足，请移除部分图片');
         const copy=await fitDraftImage(file,budget);
         remaining-=copy.size;copies.set(file,copy)
       }
-      if(current()!==chat||!body.contains(confirm)||!$('dialog').open)return;
+      if(!active()||!body.contains(confirm)||!$('dialog').open)return;
       if(batch){
-        closeDialog();await addTextFiles(files.map(file=>copies.get(file)||file),false)
+        closeDialog();await addTextFiles(files.map(file=>copies.get(file)||file),false,chat)
       }else{
         const updated=await Promise.all(files.map(async(file,i)=>{
           const copy=copies.get(file);
           return copy&&copy!==file?{name:copy.name,size:copy.size,url:await imageDataUrl(copy)}:original[i]
         }));
-        if(current()!==chat||!body.contains(confirm)||!$('dialog').open)return;
+        if(!active()||!body.contains(confirm)||!$('dialog').open)return;
         if(chat.files!==original)throw Error('附件已变化，请重新检查草稿');
         chat.files=updated;save();closeDialog();composer()
       }
@@ -3653,10 +3662,10 @@ function offerImageCopies(chat,batch=null){
   });
   body.append(status,confirm,row('取消','x',closeDialog))
 }
-async function addTextFiles(batch,offerCopies=true){
-  const c=current();
+async function addTextFiles(batch,offerCopies=true,c=current()){
   if(!batch.length)return;
   readingFiles.set(c,(readingFiles.get(c)||0)+1);resize();
+  if(visibleSideChat?.chat===c)visibleSideChat.sync();
   try{
     const imageFile=isDraftImage;
     if(batch.filter(imageFile).reduce((sum,f)=>sum+f.size,0)+draftImageBytes(c.files)>maxImageBytes){
@@ -3679,6 +3688,7 @@ async function addTextFiles(batch,offerCopies=true){
   finally{
     const left=readingFiles.get(c)-1;if(left)readingFiles.set(c,left);else readingFiles.delete(c);
     if(c===current())composer()
+    else if(visibleSideChat?.chat===c)visibleSideChat.sync()
   }
 }
 $('prompt').addEventListener('paste',event=>{
