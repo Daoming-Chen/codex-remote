@@ -48,7 +48,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     const origin='http://localhost:49011',scope='e'.repeat(64),base='/devices/'+scope;
     const parent='00000000-0000-4000-8000-000000000015',child='00000000-0000-4000-8000-000000000016';
     const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
-    let job='',mode='',answer:unknown;
+    let job='',mode='',answer:unknown,forks=0;
     await page.addInitScript(({scope,parent})=>{
       const chat={id:parent,thread:parent,title:'计划',messages:[{role:'user',text:'主任务'}],draft:'',files:[],collaborationMode:'plan',
         threadConfig:{model:'alpha',effort:'high'}};
@@ -57,7 +57,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.route(origin+'/**',async route=>{
       const path=new URL(route.request().url()).pathname;
       if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(await readFile(assets+'/index.html','utf8'),{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
-      if(path===base+'/api/thread-fork')return route.fulfill({json:{thread:child}});
+      if(path===base+'/api/thread-fork'){forks++;return route.fulfill({json:{thread:child}})}
       if(path===base+'/api/models')return route.fulfill({json:{
         models:['alpha','bravo'].map(id=>({id,name:id,efforts:['low','high'],defaultEffort:'low'})),
         defaults:{model:'alpha',effort:'low'}}});
@@ -77,7 +77,10 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
       return route.fulfill({path:assets+path});
     });
     await page.goto(origin+base+'/');
+    const forked=page.waitForResponse(res=>res.url()===origin+base+'/api/thread-fork',{timeout:4000});
     await page.keyboard.press('Control+Alt+s');
+    await forked;
+    assert.equal(job,'');
     await page.locator('#plan-mode').click();
     await page.locator('#model-picker').click();
     await page.locator('.model-view-toggle').click();
@@ -88,6 +91,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     const submitted=page.waitForResponse(res=>res.url()===origin+base+'/api/turn');
     await side.getByRole('button',{name:'发送',exact:true}).tap();
     const selection=(await submitted).request().postDataJSON();
+    assert.equal(forks,1);
     assert.equal(selection.model,'alpha');
     assert.equal(selection.effort,'high');
     assert.equal(mode,'plan');

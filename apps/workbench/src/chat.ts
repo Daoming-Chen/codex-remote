@@ -1029,6 +1029,24 @@ function mountSideChat(container,owner,chat){
   }
   pendingQuestions(chat,questions);
   visibleSideChat={chat,sync,questions};sync();
+  async function prepareThread(){
+    if(openingSideThreads.has(chat))return false;
+    openingSideThreads.add(chat);chat.error=null;sync();
+    try{
+      if(!owner.thread)throw Error('主聊天尚未关联主机会话');
+      chat.forkRequest??=crypto.randomUUID();save();
+      const res=await deviceFetch('/api/thread-fork',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({thread:owner.thread,request:chat.forkRequest,sideChat:true})});
+      const result=await res.json();
+      if(!res.ok||!result.thread||result.thread===owner.thread)throw Error(result.error||'无法创建侧边聊天');
+      chat.thread=result.thread;save();return true
+    }catch(error){chat.error=error.message;save();return false}
+    finally{
+      openingSideThreads.delete(chat);
+      if(visibleSideChat?.chat===chat)visibleSideChat.sync()
+    }
+  }
+  if(!chat.thread&&!chat.pending)void prepareThread();
   form.onsubmit=async event=>{
     event.preventDefault();if(send.disabled)return;
     if(chat.pending){
@@ -1041,15 +1059,9 @@ function mountSideChat(container,owner,chat){
     }
     const draft=field.value.trim();
     if(new TextEncoder().encode(draft).length>16000){toast('单条消息最多 16 KB');return}
-    openingSideThreads.add(chat);chat.error=null;sync();
     try{
-      if(owner.thread&&!chat.thread){
-        chat.forkRequest??=crypto.randomUUID();save();
-        const res=await deviceFetch('/api/thread-fork',{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({thread:owner.thread,request:chat.forkRequest,sideChat:true})});
-        const result=await res.json();if(!res.ok||!result.thread||result.thread===owner.thread)throw Error(result.error||'无法创建侧边聊天');
-        chat.thread=result.thread;save()
-      }
+      if(!chat.thread&&!await prepareThread())return;
+      chat.error=null;
       const id=crypto.randomUUID();chat.pending=id;chat.preview='';chat.phase='正在发送…';
       chat.outbox={id,draft,files:[],options:{expectedThread:chat.thread||null,parent:chat.parent,cwd:chat.cwd||null,projectId:chat.projectId||null,
         collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(chat)}};
@@ -1057,7 +1069,7 @@ function mountSideChat(container,owner,chat){
       if(chat.draft.trim()===draft){chat.draft='';field.value=''}
       save();void poll(chat,true)
     }catch(error){chat.error=error.message;save()}
-    finally{openingSideThreads.delete(chat);sync()}
+    finally{sync()}
   };
   if(chat.pending)void poll(chat)
 }
