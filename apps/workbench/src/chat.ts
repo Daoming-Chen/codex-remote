@@ -488,8 +488,9 @@ function applyHistorySnapshot(c,data,reviewed=false){
 async function refreshCurrentHistory(c,shared=c.shared===true){
   if(!c.thread||c.pending||c.activeTurn)return;
   const revision=selectionRevision,previousParent=c.parent,previousUpdated=c.updated,previousReceipt=c.receiptUnknown;
-  if(historyRefreshes.get(c)===revision)return;
-  historyRefreshes.set(c,revision);
+  if(historyRefreshes.get(c)?.revision===revision)return;
+  const read={revision};
+  historyRefreshes.set(c,read);
   const controller=new AbortController();
   const cancelRead=()=>controller.abort();
   const timeout=setTimeout(cancelRead,30000);
@@ -497,11 +498,11 @@ async function refreshCurrentHistory(c,shared=c.shared===true){
   if(c.historyMissing){historyLoadErrors.delete(c);showHistoryLoad(c)}
   try{
     const data=await threadApi({thread:c.thread,shared,opening:c.historyMissing||undefined},controller.signal);
-    if(revision!==selectionRevision||current()!==c||c.pending||c.parent!==previousParent||c.updated!==previousUpdated||c.receiptUnknown!==previousReceipt)return;
+    if(historyRefreshes.get(c)!==read||revision!==selectionRevision||current()!==c||c.pending||c.parent!==previousParent||c.updated!==previousUpdated||c.receiptUnknown!==previousReceipt)return;
     applyHistorySnapshot(c,data);
     return true
   }catch(error){
-    if(revision===selectionRevision&&current()===c){
+    if(historyRefreshes.get(c)===read&&revision===selectionRevision&&current()===c){
       historyLoadErrors.set(c,controller.signal.aborted?'等待主机超时，请重试。':error.message);
       if(c.historyMissing)showHistoryLoad(c)
       else toast('主机刷新失败，显示上次读取的对话')
@@ -510,7 +511,7 @@ async function refreshCurrentHistory(c,shared=c.shared===true){
   }
   finally{
     clearTimeout(timeout);document.removeEventListener('chat-selected',cancelRead);
-    if(historyRefreshes.get(c)===revision)historyRefreshes.delete(c)
+    if(historyRefreshes.get(c)===read)historyRefreshes.delete(c)
   }
 }
 let threadWatch;
@@ -4388,6 +4389,7 @@ async function recoverWorkbenchConnection(){
   if(recoveryPending){recoveryRequested=true;return}
   recoveryPending=true;
   const staleReads=[...networkReads];
+  const previousChat=current(),previousHistory=historyRefreshes.get(previousChat);
   recoveryStatus.textContent='正在检查与 '+receiverName+' 的连接…';
   try{
     const response=await deviceFetch('/api/resume',{method:'POST',signal:AbortSignal.timeout(65000)});
@@ -4402,6 +4404,7 @@ async function recoverWorkbenchConnection(){
       window.dispatchEvent(new Event('receiver-reconnected'))
     }
     syncDirectoryEvents();syncThreadWatch();
+    if(previousHistory&&historyRefreshes.get(previousChat)===previousHistory)historyRefreshes.delete(previousChat);
     for(const controller of staleReads)controller.abort();
     await Promise.allSettled([firstDirectoryRequest,directoryHeadRequest]);
     const chat=current();

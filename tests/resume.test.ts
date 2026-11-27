@@ -48,6 +48,39 @@ test('a dropped shared turn resumes without a reconnect toast over the chat',asy
   }finally{await browser.close()}
 });
 
+test('foreground recovery replaces a pending history read without reporting a host failure',async()=>{
+  const browser=await launch();
+  try{
+    const page=await browser.newPage({serviceWorkers:'block'});
+    const thread='00000000-0000-4000-8000-000000000141';
+    await page.addInitScript(({thread,scope})=>{
+      const chat={id:thread,thread,title:'历史',messages:[{role:'assistant',text:'已缓存'}],draft:'',files:[]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:thread,chats:[chat]}));
+    },{thread,scope:host.scope});
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    let reads=0;
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/threads'&&route.request().postDataJSON()?.thread===thread){
+        if(++reads===1)return;
+        return route.fulfill({json:{thread,messages:[{role:'assistant',text:'来自主机的新记录'}]}});
+      }
+      if(path===base+'/api/resume')return route.fulfill({json:{connected:true,reused:true}});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],projects:[],models:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    const reading=page.waitForRequest(req=>req.url()===origin+base+'/api/threads'&&req.postDataJSON()?.thread===thread);
+    await page.goto(origin+base+'/');
+    await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+    await reading;
+    await page.evaluate(()=>window.receiverNetworkResumed!());
+    await page.locator('#messages').getByText('来自主机的新记录',{exact:true}).waitFor({timeout:6000});
+    assert.doesNotMatch(await page.locator('#toast').textContent()||'',/主机刷新失败/);
+  }finally{await browser.close()}
+});
+
 test('cold reopening a reconnecting turn displays text already received by the receiver',async()=>{
   const browser=await launch();
   try{
