@@ -1162,26 +1162,37 @@ function mountSideChat(container,owner,chat){
       if(revision===streamRevision)externalTurn=branch.activeTurn||null;
       externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inheritedTurns.has(row.turn)):[];
       if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
-      const ends=new Map(),answered=new Set();
+      const cachedTurns=new Map();
       for(const [index,row] of chat.messages.entries()){
-        ends.set(row.turn,index+1);
-        if(row.role!=='user')answered.add(row.turn)
+        if(!cachedTurns.has(row.turn))cachedTurns.set(row.turn,{indices:[],matched:0});
+        cachedTurns.get(row.turn).indices.push(index)
       }
-      const insertions=new Map();
+      const insertions=new Map(),replacements=new Map();
       let after=0;
       for(const row of branch.messages){
         if(!row.turn||inheritedTurns.has(row.turn)||branch.activeTurn===row.turn)continue;
-        if(ends.has(row.turn)){
-          after=ends.get(row.turn);
-          if(row.role==='user'||answered.has(row.turn))continue
+        const cached=cachedTurns.get(row.turn);
+        if(cached){
+          after=cached.indices.at(-1)+1;
+          if(cached.matched<0)continue;
+          if(cached.matched<cached.indices.length){
+            const index=cached.indices[cached.matched],local=chat.messages[index];
+            const same=local.role===row.role&&(!local.id||local.id===row.id);
+            if(same&&row.role==='assistant'&&!local.items?.length&&!local.interrupted&&row.text?.startsWith(local.text)){
+              if(row.text!==local.text)replacements.set(index,{...local,...row})
+            }else if(!same||(row.role!=='user'&&JSON.stringify(local)!==JSON.stringify(row))){
+              cached.matched=-1;continue
+            }
+            cached.matched++;continue
+          }
         }
         if(!insertions.has(after))insertions.set(after,[]);
         insertions.get(after).push(row)
       }
-      if(insertions.size){
+      if(insertions.size||replacements.size){
         const history=(insertions.get(0)||[]).slice();
         for(const [index,row] of chat.messages.entries()){
-          history.push(row);
+          history.push(replacements.get(index)||row);
           for(const added of insertions.get(index+1)||[])history.push(added)
         }
         chat.messages=history;save()
