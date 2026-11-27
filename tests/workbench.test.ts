@@ -682,8 +682,13 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert.equal(await sideDraft.inputValue(),'');
     assert.equal(await page.locator('#work-tabs .work-tab').count(),2);
     assert(await sideDraft.evaluate(field=>document.activeElement===field));
+    await sideDraft.fill('关闭后仍保留的草稿');
     await page.getByRole('button',{name:'关闭 侧边聊天 2',exact:true}).tap();
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
+    await page.locator('#header-summary').tap();
+    await page.locator('#work-detail').getByRole('button',{name:'侧边聊天 2',exact:true}).tap();
+    assert.equal(await sideDraft.inputValue(),'关闭后仍保留的草稿');
+    await page.getByRole('button',{name:'关闭 侧边聊天 2',exact:true}).tap();
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
     await page.keyboard.press('Control+k');
     await page.getByRole('textbox',{name:'查找命令'}).fill('侧边聊天');
@@ -701,7 +706,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
     await page.locator('.side-chat-history').getByText('侧边处理中',{exact:true}).waitFor();
-    await page.locator('#work-tabs .work-tab').nth(1).tap();
+    await page.locator('.work-tab-wrap').filter({has:page.locator('.work-tab[aria-pressed="true"]')}).getByRole('button',{name:/^关闭 /}).tap();
     await page.locator('#work-hide').tap();
     await page.reload();
     sideComplete=true;
@@ -709,7 +714,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       const owner=JSON.parse(localStorage.getItem(key)||'{}');
       return owner.sideChats?.some((chat:{messages:{text:string}[]})=>chat.messages.some(m=>m.text==='侧边回复'));
     },'receiver:'+scope+':tim-ser-chat-record:'+thread,{timeout:5000});
-    await page.getByRole('button',{name:'显示标签页',exact:true}).tap();
+    await page.locator('#header-summary').tap();
     const unreadTab=page.getByRole('button',{name:'侧边草稿，未读回复',exact:true});
     await unreadTab.tap();
     await page.locator('.side-chat-history').getByText('侧边回复',{exact:true}).waitFor();
