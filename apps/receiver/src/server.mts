@@ -503,7 +503,7 @@ async function nativeDirectory(call,mode,target){
       nativeRoots.set(project.id,project.roots)
     }
   }
-  result.items=page.data.map(t=>({thread:t.id,title:t.name||t.preview||'新聊天',cwd:t.cwd,updated:t.updatedAt,activeFlags:t.status?.type==='active'?t.status.activeFlags:undefined,projectId:nativeProjectId(t)}));
+  result.items=page.data.map(t=>({thread:t.id,threadName:t.name||null,title:t.name||t.preview||'新聊天',cwd:t.cwd,updated:t.updatedAt,activeFlags:t.status?.type==='active'?t.status.activeFlags:undefined,projectId:nativeProjectId(t)}));
   if(query.projectId)result.items=result.items.filter(item=>item.projectId===query.projectId);
   if(query.projectCwd)result.items=result.items.filter(item=>!item.projectId&&projectDirectoryKey(item.cwd)===projectDirectoryKey(query.projectCwd));
   return result

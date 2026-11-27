@@ -252,7 +252,7 @@ async function loadProjectPage(projectId){
     for(const item of items)index.set(item.thread,item);
     Object.assign(page,state);page.count++;
     (db.projectPageCounts??={})[projectId]=page.count;
-    db.hostIndex=[...index.values()];save()
+    db.hostIndex=[...index.values()];syncSideTitles(items);save()
   }catch(e){toast(e.message)}
   finally{pendingProjectLoads.delete(load);page.busy=false;renderSidebarHistory()}
 }
@@ -963,10 +963,24 @@ function attachedSideChats(owner){
   delete owner.sideChat;
   return owner.sideChats
 }
+function syncSideTitles(records){
+  const names=new Map(records.filter(item=>Object.hasOwn(item,'threadName')).map(item=>[item.thread,item.threadName]));
+  let changed=false;
+  for(const owner of db.chats){
+    for(const side of owner.sideChats||(owner.sideChat?[owner.sideChat]:[])){
+      if(!side.thread||!names.has(side.thread))continue;
+      const title=names.get(side.thread)||null;
+      if((side.hostTitle||null)===title)continue;
+      side.hostTitle=title;changed=true
+    }
+  }
+  if(changed)renderWorkbench();
+  return changed
+}
 function sideRecord(chat,index){
   const number=chat.sideChatNumber??(index+1);
   const fallback=number>1?sideChatTab.title+' '+number:sideChatTab.title;
-  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||fallback,unread:!!chat.unreadReply}
+  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.hostTitle||chat.messages[0]?.text?.slice(0,36)||fallback,unread:!!chat.unreadReply}
 }
 function markUnreadSideControl(button,title){
   button.classList.add('side-unread');
@@ -4238,7 +4252,7 @@ function syncDirectoryEvents(){
     try{rename=JSON.parse(event.data)}catch{return}
     if(!rename||typeof rename.thread!=='string'||typeof rename.title!=='string')return;
     for(const changes of renamesDuringReads)changes.set(rename.thread,rename.title);
-    let changed=false;
+    let changed=syncSideTitles([{thread:rename.thread,threadName:rename.title}]);
     for(const list of [db.chats,db.hostIndex,db.pinnedThreads]){
       for(const item of list||[])if(item.thread===rename.thread&&item.title!==rename.title){
         item.title=rename.title;changed=true
@@ -4274,7 +4288,7 @@ function applyDirectoryPage(page,append,restoring=false){
   if(current()&&$('plugin-page').hidden)renderChatTitle(current());
   if(!append&&Array.isArray(page.pinned))db.pinnedThreads=page.pinned;
   if(!append&&Array.isArray(page.projects)){db.hostProjects=page.projects;renderProjectName(current())}
-  db.hostIndex=[...index.values()];
+  db.hostIndex=[...index.values()];syncSideTitles(page.items);
   if(!restoring)db.directoryCursor=page.cursor||null;
   save();renderSidebarHistory();
   if(restoring){directoryPreviewRevision++;$('directory-status').textContent='正在恢复更多会话…';return}
@@ -4451,7 +4465,7 @@ async function threadApi(args,signal){
     if(renames.size){
       if(renames.has(args.thread))data.name=renames.get(args.thread);
       for(const list of [data.items,data.pinned]){
-        for(const item of list||[])if(renames.has(item.thread))item.title=renames.get(item.thread)
+        for(const item of list||[])if(renames.has(item.thread))item.threadName=item.title=renames.get(item.thread)
       }
     }
     return data
@@ -5153,6 +5167,7 @@ function renameChat(c){
         status.textContent=('正在同步到 '+receiverName+'…');
         const res=await deviceFetch('/api/thread-name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({thread:c.thread,name})});
         const record=await res.json();if(!res.ok)throw Error(record.error||'重命名失败');c.title=record.name;
+        syncSideTitles([{thread:c.thread,threadName:record.name}]);
         for(const list of [db.chats,db.hostIndex,db.pinnedThreads]){const copy=list?.find(item=>item.thread===c.thread);if(copy)copy.title=record.name}
       }else if(c.parent||c.pending){throw Error('请从“主机会话”打开此任务后重命名。')}
       else{c.title=name}

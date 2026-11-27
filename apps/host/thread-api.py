@@ -52,7 +52,7 @@ def voice_preview_title(preview):
 def summaries(page):
     return [{"activeFlags": (t["status"].get("activeFlags") or []) if isinstance(t.get("status"), dict) and t["status"].get("type") == "active" else [],
                   "readState": (page.get("readStates") or {}).get(t["id"]), "thread": t["id"], "projectId": t.get("projectId"), "cwd": t.get("cwd", ""), "updated": t["updatedAt"],
-                  "title": t.get("name") or voice_preview_title(t.get("preview")) or (t.get("preview") or "未命名任务")[:85]}
+                  "threadName": t.get("name"), "title": t.get("name") or voice_preview_title(t.get("preview")) or (t.get("preview") or "未命名任务")[:85]}
                  for t in page["data"]]
 
 def pins():

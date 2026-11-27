@@ -814,5 +814,21 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert.equal(sideSubmissions,1);
     assert.equal(await page.locator('#messages').getByText('侧边回复',{exact:true}).count(),0);
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
+    let publishRename!:()=>void;
+    const rename=new Promise<void>(resolve=>{publishRename=resolve});
+    await page.route(origin+base+'/api/directory-events',async route=>{
+      await rename;
+      await route.fulfill({contentType:'text/event-stream',body:'event: thread-name\ndata: '+JSON.stringify({thread:childThread,title:'主机上的新标题'})+'\n\n'})
+    });
+    await page.route(origin+base+'/api/threads',route=>route.request().postDataJSON().thread?route.fallback():route.fulfill({
+      json:{items:[{thread:childThread,cwd:root,threadName:'已保存的侧聊标题',title:'已保存的侧聊标题'}],projects:[project]}
+    }));
+    await page.reload({waitUntil:'domcontentloaded'});
+    const activeTab=page.locator('#work-tabs .work-tab[aria-pressed="true"]');
+    await activeTab.getByText('已保存的侧聊标题',{exact:true}).waitFor();
+    await sideDraft.fill('保留侧聊草稿');
+    publishRename();
+    await activeTab.getByText('主机上的新标题',{exact:true}).waitFor();
+    assert.equal(await sideDraft.inputValue(),'保留侧聊草稿');
   } finally { await browser.close() }
 });
