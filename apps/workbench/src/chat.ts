@@ -4706,13 +4706,19 @@ async function remotePicker(projects){
   }
   const seen=new Set();
   const search=projects?element('input','field'):null;
-  const empty=element('p','quiet','已加载的项目中没有匹配项。');
+  const empty=element('p','quiet','没有匹配的项目。');
+  const visited=new Set();
+  let moreProjects=null,loading=true,failed=false;
   function filterProjects(){
     if(!search)return;
     const query=search.value.trim().toLocaleLowerCase();
     const choices=Array.from(panel.querySelectorAll('[data-project-option]'));
     for(const choice of choices)choice.hidden=!choice.textContent.toLocaleLowerCase().includes(query);
-    empty.hidden=!query||choices.some(choice=>!choice.hidden)
+    const matched=choices.some(choice=>!choice.hidden);
+    empty.hidden=!query||matched||loading||failed||!!moreProjects;
+    if(query&&!matched&&moreProjects&&$('dialog').open){
+      status.textContent='正在搜索更多项目…';moreProjects.click()
+    }
   }
   if(search){
     search.type='search';search.placeholder='搜索项目';search.setAttribute('aria-label',search.placeholder);
@@ -4744,17 +4750,26 @@ async function remotePicker(projects){
   if(db.hostIndex?.length){appendItems(db.hostIndex);status.textContent='已显示上次读取的目录，正在刷新…'}
   filterProjects();
   async function load(cursor){
+    loading=true;failed=false;
     try{
-      const page=await directoryPage(cursor);if(!body.contains(panel))return;
+      const page=projects&&cursor?await threadApi({cursor}):await directoryPage(cursor);
+      if(!body.contains(panel)||!$('dialog').open)return;
       status.textContent=projects?(current().thread||current().messages.length?'选择项目将打开一条新任务。':'选择此草稿的工作目录。'):'选择会话以读取主机上的历史记录。';
       const focusedKey=panel.contains(document.activeElement)?document.activeElement.dataset.projectOption:null;
       if(!cursor){panel.replaceChildren();seen.clear();if(projects)appendItems(roots())}
-      appendItems(page.items);filterProjects();
+      appendItems(page.items);
+      if(cursor)visited.add(cursor);
+      if(page.cursor&&visited.has(page.cursor))throw Error('主机返回了重复的目录游标');
+      if(page.cursor){
+        const more=row('加载更多','chevron-down',()=>{more.remove();moreProjects=null;void load(page.cursor)});
+        panel.append(more);if(projects)moreProjects=more
+      }
+      loading=false;filterProjects();
       if(!cursor&&focusedKey){const match=Array.from(panel.children).find(el=>el.dataset.projectOption===focusedKey&&!el.hidden);(match||search)?.focus()}
-      if(page.cursor){const more=row('加载更多','chevron-down',()=>{more.remove();load(page.cursor)});panel.append(more)}
       if(!panel.children.length)status.textContent='此主机没有返回会话。'
     }catch(e){
       if(!body.contains(panel))return;
+      loading=false;failed=true;empty.hidden=true;
       status.textContent=panel.children.length?'刷新失败，当前目录仍可浏览。':'读取失败：'+e.message;
       const retry=row('重试','server',()=>{retry.remove();load(cursor)});panel.append(retry)
     }

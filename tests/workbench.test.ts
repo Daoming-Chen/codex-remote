@@ -649,7 +649,12 @@ test('browse the selected host project and read nested working files on a tablet
       const path = new URL(route.request().url()).pathname;
       if (path === base + '/') return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
         await readFile(directory + '/index.html','utf8'), {deviceName:'文件主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
-      if (path === base + '/api/threads') return route.fulfill({json:{items:[],projects:[project,{id:'second-project',name:'第二项目',roots:['C:\\dev\\second'] }]}});
+      if (path === base + '/api/threads') {
+        const {cursor}=route.request().postDataJSON();
+        if(cursor==='next')return route.fulfill({json:{items:[],cursor:'last'}});
+        if(cursor==='last')return route.fulfill({json:{items:[{thread:'00000000-0000-4000-8000-000000000073',title:'旧会话',cwd:'C:\\dev\\older-project'}]}});
+        return route.fulfill({json:{items:[],cursor:'next',projects:[project,{id:'second-project',name:'第二项目',roots:['C:\\dev\\second'] }]}});
+      }
       if (path === base + '/api/project-directories') {
         const {relative,workspace} = route.request().postDataJSON();
         assert.equal(workspace,root);
@@ -664,6 +669,12 @@ test('browse the selected host project and read nested working files on a tablet
     });
     await page.goto(origin + base + '/');
     await page.getByRole('button',{name:'选择远程项目',exact:true}).tap();
+    const projectSearch=page.getByRole('searchbox',{name:'搜索项目'});
+    await projectSearch.fill('older-project');
+    await page.locator('#dialog').getByRole('button',{name:'older-project',exact:true}).waitFor();
+    await projectSearch.fill('missing-project');
+    await page.getByText('没有匹配的项目。',{exact:true}).waitFor();
+    await projectSearch.fill('');
     await page.locator('#dialog [data-project-option]').first().tap();
     await page.getByRole('button',{name:'切换侧面板',exact:true}).tap();
     await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
