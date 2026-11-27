@@ -48,6 +48,40 @@ test('a dropped shared turn resumes without a reconnect toast over the chat',asy
   }finally{await browser.close()}
 });
 
+test('cold reopening a reconnecting turn displays text already received by the receiver',async()=>{
+  const browser=await launch();
+  try{
+    const page=await browser.newPage({serviceWorkers:'block'});
+    const thread='00000000-0000-4000-8000-000000000021',job='00000000-0000-4000-8000-000000000022';
+    await page.addInitScript(({thread,job,scope})=>{
+      const chat={id:thread,thread,pending:job,title:'原聊天',messages:[{role:'user',text:'原问题'}],draft:'',files:[]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:thread,chats:[chat]}));
+    },{thread,job,scope:host.scope});
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    let resumed=false;
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path.startsWith(base+'/api/turn/'+job)){
+        const snapshot={id:job,thread,turn:'original-turn',status:resumed?'done':'waiting',reconnecting:!resumed,
+          parts:['已收到的第一段'],progress:{message:'已收到的第二段'},answer:'已收到的第一段\n\n已收到的第二段。'};
+        return path.endsWith('/events')?route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'}):route.fulfill({json:snapshot});
+      }
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    await page.goto(origin+base+'/');
+    const messages=page.locator('#messages');
+    await messages.getByText('已收到的第二段',{exact:true}).waitFor({timeout:4000});
+    assert.equal(await messages.getByText('已收到的第一段',{exact:true}).count(),1);
+    assert.doesNotMatch(await messages.innerText(),/正在重新连接/);
+    resumed=true;
+    await messages.getByText('已收到的第二段。',{exact:true}).waitFor();
+    assert.equal(await messages.getByText('已收到的第一段',{exact:true}).count(),1);
+  }finally{await browser.close()}
+});
+
 test('restarted discovery owns the device list when the superseded host replies last', async () => {
   let oldReply!: (hosts:typeof host[]) => void;
   let oldSignal: AbortSignal | undefined;

@@ -4078,7 +4078,11 @@ async function poll(c,firstAttempt=false){
         restoreUnsent(c,id);
         c.error=j.notSubmitted?(''+receiverName+' 离线。消息未发送，恢复连接后可重新发送。'):'主机上的另一个 Codex 实例正在写入此会话。消息未发送。';
         if(current()===c)composer()
-      }}else if(!j.reconnecting){c.items=j.progress?.items||[];c.preview=streamText(j);const labels={command_execution:'正在执行命令…',mcp_tool_call:'正在调用工具…',web_search:'正在搜索…',file_change:'正在处理文件…'};c.phase=j.status==='preparing'?('正在连接 '+receiverName+'…'):labels[j.progress?.item]||(j.progress?.started?'正在处理任务…':'正在启动 Codex…')}
+      }}else if(j.reconnecting){
+        const received=streamText(j);
+        if(received&&received.startsWith(c.preview||''))c.preview=received;
+        if(!c.items?.length&&j.progress?.items)c.items=j.progress.items
+      }else{c.items=j.progress?.items||[];c.preview=streamText(j);const labels={command_execution:'正在执行命令…',mcp_tool_call:'正在调用工具…',web_search:'正在搜索…',file_change:'正在处理文件…'};c.phase=j.status==='preparing'?('正在连接 '+receiverName+'…'):labels[j.progress?.item]||(j.progress?.started?'正在处理任务…':'正在启动 Codex…')}
     if(oldWait!==localWaitLabel(c))renderSidebarHistory();
     if(c.outbox?.id===id&&(j.turn||!c.pending))delete c.outbox;
     const content=ordered??[c.preview,c.items,j.stepPlan,j.proposedPlans];
