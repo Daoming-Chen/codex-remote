@@ -1162,17 +1162,21 @@ function mountSideChat(container,owner,chat){
       if(revision===streamRevision)externalTurn=branch.activeTurn||null;
       externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inheritedTurns.has(row.turn)):[];
       if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
-      const ends=new Map(chat.messages.map((row,index)=>[row.turn,index+1]));
+      const ends=new Map(),answered=new Set();
+      for(const [index,row] of chat.messages.entries()){
+        ends.set(row.turn,index+1);
+        if(row.role!=='user')answered.add(row.turn)
+      }
       const insertions=new Map();
       let after=0;
       for(const row of branch.messages){
         if(!row.turn||inheritedTurns.has(row.turn)||branch.activeTurn===row.turn)continue;
         if(ends.has(row.turn)){
-          after=ends.get(row.turn)
-        }else{
-          if(!insertions.has(after))insertions.set(after,[]);
-          insertions.get(after).push(row)
+          after=ends.get(row.turn);
+          if(row.role==='user'||answered.has(row.turn))continue
         }
+        if(!insertions.has(after))insertions.set(after,[]);
+        insertions.get(after).push(row)
       }
       if(insertions.size){
         const history=(insertions.get(0)||[]).slice();

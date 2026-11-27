@@ -129,7 +129,8 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
     const page=await browser.newPage({serviceWorkers:'block'});
     const thread='00000000-0000-4000-8000-000000000021',job='00000000-0000-4000-8000-000000000022';
     await page.addInitScript(({thread,job,scope,side})=>{
-      const chat={id:thread,thread,pending:job,title:'原聊天',messages:[{role:'user',text:'原问题'}],draft:'',files:[]};
+      const chat={id:thread,thread,pending:job,title:'原聊天',messages:[
+        {role:'user',turn:'cached-question-turn',text:'已缓存的问题'},{role:'user',text:'原问题'}],draft:'',files:[]};
       const key='receiver:'+scope+':tim-ser-chats-v2';
       if(localStorage.getItem(key))return;
       const tab='receiver:side-chat';
@@ -161,7 +162,10 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
         if(id){
           if(id===thread)branchReads++;else parentReads++;
           const inherited={turn:'parent-turn',role:'user',text:'主聊天上下文'};
-          const messages=id===thread?[inherited,{turn:'original-turn',role:'user',text:'原问题'},
+          const messages=id===thread?[inherited,{turn:'cached-question-turn',role:'user',text:'已缓存的问题'},
+            {turn:'cached-question-turn',role:'assistant',text:'停止前的文字'},
+            {turn:'cached-question-turn',role:'status',text:'',status:'interrupted',turnDurationMs:6000},
+            {turn:'original-turn',role:'user',text:'原问题'},
             {turn:'other-client-turn',role:'assistant',text:'来自另一台设备的回复'}]:[inherited];
           if(id===thread&&externalDone)messages.push({turn:'live-turn',role:'assistant',text:'跨端最终回复'});
           return route.fulfill({json:{thread:id,messages,activeTurn:id===thread&&!externalDone?'live-turn':null}})
@@ -206,6 +210,9 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await page.reload();
       await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
       await messages.getByText('来自另一台设备的回复',{exact:true}).waitFor();
+      await messages.getByText('停止前的文字',{exact:true}).waitFor();
+      assert.equal(await messages.getByText('你已停止，已用时 6秒',{exact:true}).count(),1);
+      assert.equal(await messages.getByText('已缓存的问题',{exact:true}).count(),1);
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
       const beforeFinal={parentReads,branchReads};
       const panel=page.locator('.side-chat'),field=panel.locator('textarea');
