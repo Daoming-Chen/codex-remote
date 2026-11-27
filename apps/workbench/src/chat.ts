@@ -987,7 +987,8 @@ let visibleSideChat;
 function mountSideChat(container,owner,chat){
   const transcript=element('div','side-chat-history'),status=element('p','quiet');
   const form=document.createElement('form'),field=document.createElement('textarea'),send=element('button','','发送');
-  const empty=element('div','side-chat-empty');empty.append(icon('message-circle'),element('strong','','侧边聊天'),element('span','','在这里追问，不会打断主聊天。'));
+  const empty=element('div','side-chat-empty');
+  empty.append(icon('message-circle'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
   field.placeholder='在侧边聊天中提问';field.setAttribute('aria-label',field.placeholder);
   field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;save();sync()};
   field.onkeydown=event=>{
