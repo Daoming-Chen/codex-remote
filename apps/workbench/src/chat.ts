@@ -618,7 +618,7 @@ async function followExternalTurn(c,revision,notify=false){
         save();renderGoal(c);modelLabel(c);messages(false);retry=0;
         if(c.pending)void poll(c)
       }catch{
-        if(!retry&&active())toast('连接中断，正在重新读取主机任务');
+        if(!retry&&active()&&!recoveryPending)void recoverWorkbenchConnection();
         retry=Math.min((retry||1200)*2,15000)
       }
     }

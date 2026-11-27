@@ -16,6 +16,38 @@ function launch() {
   return chromium.launch(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'msedge'});
 }
 
+test('a dropped shared turn resumes without a reconnect toast over the chat',async()=>{
+  const browser=await launch();
+  try{
+    const page=await browser.newPage({serviceWorkers:'block',viewport:{width:820,height:920}});
+    const thread='00000000-0000-4000-8000-000000000019';
+    const messages=[{role:'user',text:'主机上的任务',turn:'active-turn'}];
+    await page.addInitScript(({thread,messages,scope})=>{
+      const chat={id:thread,thread,title:'共享聊天',activeTurn:'active-turn',messages,draft:'尚未发送',files:[]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:thread,chats:[chat]}));
+    },{thread,messages,scope:host.scope});
+    let reads=0,probes=0;
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/threads'&&route.request().postDataJSON().thread===thread){
+        if(++reads===1)return route.abort('connectionreset');
+        return route.fulfill({json:{thread,messages:[...messages,{role:'assistant',text:'主机回复已完成',turn:'active-turn'}]}});
+      }
+      if(path===base+'/api/resume'){probes++;return route.fulfill({json:{connected:true,reused:true}})}
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],projects:[],models:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    await page.goto(origin+base+'/');
+    await page.locator('#messages').getByText('主机回复已完成',{exact:true}).waitFor({timeout:15000});
+    assert.doesNotMatch(await page.locator('#toast').textContent()||'',/连接中断|重新连接/);
+    assert.equal(await page.locator('#prompt').inputValue(),'尚未发送');
+    assert.equal(probes,1);
+  }finally{await browser.close()}
+});
+
 test('restarted discovery owns the device list when the superseded host replies last', async () => {
   let oldReply!: (hosts:typeof host[]) => void;
   let oldSignal: AbortSignal | undefined;
