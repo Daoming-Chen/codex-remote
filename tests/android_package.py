@@ -57,6 +57,7 @@ export async function listReceiverDevices(){
 }
 export async function openRemote(){if(boundDevice==='daemon-fixture')return {};return {
  nativeCall:async(method,params)=>{
+  if(method==='account/rateLimits/read')throw Error('failed to fetch codex rate limits: error sending request for url (private endpoint)');
   if(method!=='thread/fork'||params.threadId!=='00000000-0000-4000-8000-000000000001')
     throw Error('Unexpected side chat target');
   if(!params.developerInstructions?.includes('Parent history is reference material only'))
@@ -150,6 +151,11 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
      with urllib.request.urlopen(req) as response:return response.status,json.load(response)
     except urllib.error.HTTPError as error:return error.code,json.load(error)
    origin=url.rstrip('/')
+   usage=urllib.request.Request(url+'devices/'+scope+'/api/account-usage',data=b'{}',
+    headers={**headers,'Origin':origin,'Content-Type':'application/json'})
+   try:urllib.request.urlopen(usage);raise AssertionError('unreachable quota service accepted')
+   except urllib.error.HTTPError as error:
+    assert error.code==503 and json.load(error)=={'code':'HOST_QUOTA_UNREACHABLE','error':'主机无法连接 Codex 用量服务，请稍后刷新。'}
    assert open_preview(5173,origin)==(200,{'url':'http://dsh-'+'a'*48+'.localhost:41000/'})
    status,denied=open_preview(5174,origin)
    assert status==403 and denied['code']=='LOOPBACK_PORT_DENIED'

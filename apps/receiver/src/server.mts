@@ -1218,6 +1218,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       }
       const path=await runtimeDriver();
       const data=JSON.parse(await readRemote('timeout 35 python3 '+path+' --usage'));
+      if(data.type==='turn.failed'&&typeof data.error?.message==='string')throw Error(data.error.message);
       if(!Array.isArray(data.groups))return json(503,{error:'主机暂时无法读取账号用量'});
       return json(200,data)
     }
@@ -1758,6 +1759,8 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       return json(503,{code:e.code,error:'完成应用内的 Remote 设备授权后，即可选择主机。'});
     if(['REMOTE_NOT_PAIRED','REMOTE_HOST_ABSENT','REMOTE_HOST_OFFLINE'].includes(e.code))return json(503,{code:e.code,error:e.message,...(diagnostic&&e.code==='REMOTE_HOST_OFFLINE'?{lastDisconnect:diagnostic}:{})});
     if(req.method==='POST'&&req.url==='/api/devices')return json(503,deviceDirectoryError(e));
+    if(req.url==='/api/account-usage'&&/failed to fetch codex rate limits: error sending request/i.test(e.message))
+      return json(503,{code:'HOST_QUOTA_UNREACHABLE',error:'主机无法连接 Codex 用量服务，请稍后刷新。'});
     if(/TRANSPORT|CONNECT|TIMEOUT|fetch failed|Control socket|timed out/i.test([e.code,e.message,e.cause?.code].join(' ')))
       return json(503,{error:'ds-harness-remote 连接未就绪，请重试',...(diagnostic?{lastDisconnect:diagnostic}:{})});
     if(req.url==='/api/account-usage')return json(503,{error:'当前主机未返回账号用量，可稍后刷新'});
