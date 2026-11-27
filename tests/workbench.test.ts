@@ -677,6 +677,19 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.locator('#header-options').tap();
     await page.getByRole('button',{name:'新建侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
+    // WebView 83 drops :has() selectors. Shrink the available height as an IME would.
+    await page.evaluate(()=>{
+      for(const sheet of document.styleSheets)for(const rule of Array.from(sheet.cssRules)){
+        if(rule instanceof CSSStyleRule&&rule.selectorText.includes('#work-detail:has('))rule.selectorText=':not(*)';
+      }
+    });
+    await page.setViewportSize({width:820,height:440});
+    const sideSend=page.locator('.side-chat > form button');
+    const sendBounds=await sideSend.boundingBox(),panelBounds=await page.locator('#workbench').boundingBox();
+    assert(sendBounds&&panelBounds);
+    const gap=panelBounds.y+panelBounds.height-sendBounds.y-sendBounds.height;
+    assert(gap>=0&&gap<40,'side chat send button stays at the bottom of the resized panel');
+    await page.setViewportSize({width:820,height:900});
     await sideDraft.fill('侧边草稿');
     await page.keyboard.press('Control+Alt+s');
     assert.equal(await sideDraft.inputValue(),'');

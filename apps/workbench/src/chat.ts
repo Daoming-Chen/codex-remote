@@ -1275,6 +1275,7 @@ function renderWorkbench(){
   const home=!chat.messages.length&&!chat.thread;
   const emptyPanel=!!chat.emptyPanelOpen&&!summary&&!view?.ids.length;
   const hidden=!!(chat.workHidden&&(summary||view?.ids.length));
+  if(summary||emptyPanel)detail.classList.remove('side-chat-detail');
   const projectContext=JSON.stringify([chat.projectId,chat.cwd]);
   for(const panel of pane.querySelectorAll(':scope > [data-panel-tab]')){
     if(panel.dataset.owner!==chat.id||!view?.ids.includes(panel.dataset.panelTab)||
@@ -1378,6 +1379,7 @@ function renderWorkbench(){
   tabs.querySelector('.work-tab[aria-pressed="true"]')?.parentElement.scrollIntoView({block:'nearest',inline:'nearest'});
   }
   const record=openRecords.find(x=>x.id===activeRecord);
+  detail.classList.toggle('side-chat-detail',record.type==='sideChat');
   if(record===browserTab||record===projectFilesTab){
     detail.hidden=true;
     let panel=pane.querySelector(':scope > [data-panel-tab="'+record.id+'"]');

@@ -50,7 +50,7 @@ dialog.model-menu::backdrop{background:transparent}
   [data-theme=dark] .work-tab-wrap:has(.work-tab[aria-pressed=true]){background:#2a2a2a}
 }
 #work-detail,.project-files-panel{padding:12px;overflow:auto}
-#work-detail:has(>.side-chat){display:flex;flex:1;min-height:0}
+#work-detail.side-chat-detail{display:flex;flex:1;min-height:0}
 .side-chat{display:flex;flex:1;min-width:0;flex-direction:column;gap:8px}
 .side-chat-history{flex:1;min-height:0;overflow:auto;overflow-wrap:anywhere}
 .side-chat-history>div{margin:8px 0}
