@@ -1023,7 +1023,7 @@ function mountSideChat(container,owner,chat){
     send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:!field.value.trim()||openingSideThreads.has(chat)
   }
   pendingQuestions(chat,questions);
-  visibleSideChat={chat,sync,questions};sync();
+  visibleSideChat={chat,sync,questions,form};sync();
   async function prepareThread(){
     if(openingSideThreads.has(chat))return false;
     openingSideThreads.add(chat);chat.error=null;sync();
@@ -1041,7 +1041,8 @@ function mountSideChat(container,owner,chat){
       if(visibleSideChat?.chat===chat)visibleSideChat.sync()
     }
   }
-  if(!chat.thread&&!chat.pending)void prepareThread();
+  const ready=!chat.thread&&!chat.pending?prepareThread():Promise.resolve(!!chat.thread);
+  visibleSideChat.ready=ready;
   form.onsubmit=async event=>{
     event.preventDefault();if(send.disabled)return;
     if(chat.pending){
@@ -4099,8 +4100,21 @@ async function steer(c){
     delete c.steerRequest
   }catch(e){toast(e.message)}finally{pendingSteerReceipts.delete(c);delete c.steering;save();if(current()===c){composer();messages(false)}}
 }
-$('steer').onclick=()=>steer(current());
-$('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}if(c.pending||c.activeTurn){await steer(c);return}if(readingFiles.has(c)||(!text&&!files.length))return;
+$('steer').onclick=()=>$('composer').requestSubmit();
+$('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}
+  if(/^\/side(?:\s|$)/.test(text)){
+    if(!c.thread){toast('当前聊天开始后才能使用 /side');return}
+    if(files.length||readingFiles.has(c)){toast('请先移除附件，再使用 /side');return}
+    const question=text.slice(5).trim();
+    openRecord(sideChatTab);
+    const side=visibleSideChat;
+    side.chat.draft=question;c.draft='';save();composer();side.sync();
+    if(question&&await side.ready&&visibleSideChat===side&&side.form.isConnected&&side.chat.draft===question){
+      side.form.requestSubmit()
+    }
+    return
+  }
+  if(c.pending||c.activeTurn){await steer(c);return}if(readingFiles.has(c)||(!text&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const prompt=promptWithFiles(text,files);if(new TextEncoder().encode(prompt).length>16000){toast('单条消息最多 16 KB');return}
   const foreground=document.hidden?null:{started:performance.now(),selection:selectionRevision,foreground:foregroundRevision};

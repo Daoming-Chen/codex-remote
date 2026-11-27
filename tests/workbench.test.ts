@@ -78,7 +78,8 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     });
     await page.goto(origin+base+'/');
     const forked=page.waitForResponse(res=>res.url()===origin+base+'/api/thread-fork',{timeout:4000});
-    await page.keyboard.press('Control+Alt+s');
+    await page.locator('#prompt').fill('/side');
+    await page.locator('#prompt').press('Enter');
     await forked;
     assert.equal(job,'');
     await page.locator('#plan-mode').click();
@@ -100,6 +101,14 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await side.getByRole('button',{name:'提交回答'}).tap();
     await side.getByText('已收到回答',{exact:true}).waitFor();
     assert.deepEqual(answer,{turn:'side-turn',token:'pick',answers:{format:{answers:['表格']}}});
+    const commandTurn=page.waitForRequest(req=>req.url()===origin+base+'/api/turn');
+    await page.locator('#prompt').fill('/side 单独追问');
+    await page.locator('#prompt').press('Enter');
+    const commandRequest=(await commandTurn).postDataJSON();
+    assert.equal(commandRequest.expectedThread,child);
+    assert.equal(commandRequest.prompt,'单独追问');
+    assert.equal(forks,2);
+    assert.equal(await page.locator('#prompt').inputValue(),'');
   }finally{await browser.close()}
 });
 
