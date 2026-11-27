@@ -30,7 +30,8 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     },{thread,job,scope:host.scope,side});
     const start='行内 $x^2$ 和 \\(a_i\\)。\n\n$$\n\\frac{1}{';
     const answer=start+'2}\n$$\n\n\\[\\sqrt{x}\\]\n\n`$code$`，价格 $5 和 $10。\n\n```math\nx^3\n```';
-    const text=answer+'\n\n```math\n\\frac{1}{';
+    const longEquation=Array.from({length:80},(_,i)=>'x_{'+i+'}').join('+')+'=z';
+    const text=answer+'\n\n$$\n'+longEquation+'\n$$\n\n```math\n\\frac{1}{';
     let complete=false;
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     await page.route(origin+'/**',route=>{
@@ -50,11 +51,20 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     assert.equal(await messages.locator('.katex-error').count(),0);
     complete=true;
     await messages.locator('.answer .katex-error').waitFor();
-    assert.equal(await messages.locator('.katex').count(),5);
-    assert.equal(await messages.locator('.katex-display').count(),3);
+    assert.equal(await messages.locator('.katex').count(),6);
+    assert.equal(await messages.locator('.katex-display').count(),4);
     assert.equal(await messages.locator('code').innerText(),'$code$');
     assert.match(await messages.innerText(),/价格 \$5 和 \$10/);
     assert(await page.evaluate(async()=>(await document.fonts.load('16px KaTeX_Main')).some(face=>face.status==='loaded')));
+    const bounds=await messages.locator('.katex-display').last().evaluate(display=>{
+      const symbols=display.querySelectorAll('.katex-html > .katex-base');
+      const start=symbols[0].getBoundingClientRect().left-display.getBoundingClientRect().left;
+      display.scrollLeft=display.scrollWidth;
+      const end=display.getBoundingClientRect().right-symbols[symbols.length-1].getBoundingClientRect().right;
+      return {start,end,scrolled:display.scrollLeft}
+    });
+    assert(bounds.scrolled>0&&bounds.start>=-1&&bounds.end>=-1,JSON.stringify(bounds));
+    assert(await messages.evaluate(el=>el.scrollWidth<=el.clientWidth+1));
   }finally{await browser.close()}
 });
 
