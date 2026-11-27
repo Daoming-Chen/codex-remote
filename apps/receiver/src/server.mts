@@ -1363,7 +1363,10 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     if(req.method==='POST'&&req.url==='/api/connection'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const ctx=deviceId&&await openRemote();
-      if(ctx?.nativeCall)return json(200,{host:deviceName,checkedAt:Date.now(),mode:ctx.transportMode(),lastDisconnect:ctx.lastDisconnect?.(),nativeCodex:true,appServerReady:true});
+      if(ctx?.nativeCall){
+        await ctx.nativeCall('model/list',{limit:1});
+        return json(200,{host:deviceName,checkedAt:Date.now(),mode:ctx.transportMode(),lastDisconnect:ctx.lastDisconnect?.(),nativeCodex:true,appServerReady:true})
+      }
       const path=await runtimeDriver();
       let mode,nativeCodex;
       const probe='if result=$(timeout 20 python3 '+path+' --health 2>/dev/null); then printf "%s\\n" "$result"; else echo \'{"ready":false}\'; fi';
