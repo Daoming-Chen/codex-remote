@@ -804,6 +804,12 @@ test('show tabs opens one combobox for project files and approved host web apps 
     const unreadTab=page.getByRole('button',{name:'侧边草稿，未读回复',exact:true});
     await unreadTab.tap();
     await page.locator('.side-chat-history').getByText('侧边回复',{exact:true}).waitFor();
+    await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin});
+    const sideHistory=page.locator('.side-chat-history');
+    await sideHistory.getByRole('button',{name:'复制回复',exact:true}).tap();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'侧边回复');
+    await sideHistory.getByRole('button',{name:'复制消息',exact:true}).tap();
+    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'侧边草稿');
     assert.equal(await unreadTab.count(),0);
     assert.equal(sideSubmissions,1);
     assert.equal(await page.locator('#messages').getByText('侧边回复',{exact:true}).count(),0);

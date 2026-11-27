@@ -1028,7 +1028,10 @@ function mountSideChat(container,owner,chat){
       .filter(m=>m.text||m.images?.length||m.role==='steps');
     if(!ordered?.length&&chat.pending&&chat.preview)rows.push({role:'assistant',text:chat.preview});
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
-    const content=JSON.stringify(rows.map(m=>[m.role,m.text,m.explanation,m.steps]));
+    const stored=new Set(chat.messages);
+    for(const row of ordered||[])stored.delete(row);
+    const canCopy=row=>!!row.text&&(row.role==='user'||(row.role==='assistant'&&stored.has(row)));
+    const content=JSON.stringify(rows.map(m=>[m.role,m.text,m.explanation,m.steps,canCopy(m)]));
     if(content!==last||rows.some((m,i)=>m.images!==displayedImages[i])){
       const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
       last=content;displayedImages=rows.map(m=>m.images);transcript.replaceChildren();
@@ -1040,7 +1043,12 @@ function mountSideChat(container,owner,chat){
           message.textContent=text||'';
           for(const url of images||[])message.append(attachmentImage(url))
         }else message.innerHTML=window.renderMarkdown(text);
-        transcript.append(message)
+        transcript.append(message);
+        if(canCopy(row)){
+          const actions=element('div',role==='user'?'actions user-actions':'actions');
+          actions.append(copyButton(role==='user'?'复制消息':'复制回复',()=>text));
+          transcript.append(actions)
+        }
       }
       if(atEnd)transcript.scrollTop=transcript.scrollHeight
     }
