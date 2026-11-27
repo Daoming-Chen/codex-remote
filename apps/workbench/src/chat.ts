@@ -1074,15 +1074,16 @@ function mountSideChat(container,owner,chat){
         }
         continue
       }
-      if(entry.text!==text||entry.images!==images){
+      const streaming=role==='assistant'&&!stored.has(row);
+      if(entry.text!==text||entry.images!==images||entry.streaming!==streaming){
         if(role==='user'){
           entry.message.textContent=text||'';
           for(const url of images||[])entry.message.append(attachmentImage(url))
         }else{
           entry.message.dataset.turn=row.turn||'';
-          renderLiveAnswer(entry.message,text,entry.wrapped)
+          renderLiveAnswer(entry.message,text,entry.wrapped,streaming)
         }
-        entry.text=text;entry.images=images
+        entry.text=text;entry.images=images;entry.streaming=streaming
       }
       if(canCopy(row)&&!entry.actions){
         entry.actions=element('div',role==='user'?'actions user-actions':'actions');
@@ -1792,8 +1793,8 @@ function decorateAnswer(body,wrapped,startIndex){
   return index
 }
 const liveMarkdown=new WeakMap();
-function renderLiveAnswer(body,text,wrapped){
-  const blocks=window.renderMarkdownBlocks(text||''),previous=liveMarkdown.get(body)||[];
+function renderLiveAnswer(body,text,wrapped,streaming=true){
+  const blocks=window.renderMarkdownBlocks(text||'',streaming),previous=liveMarkdown.get(body)||[];
   let start=0;
   while(start<blocks.length&&previous[start]?.html===blocks[start])start++;
   const template=document.createElement('template');
@@ -2101,7 +2102,7 @@ function messages(jump=true){renderWorkbench();const c=current();if(readingReply
       const reuse=last&&m.text?.startsWith(last.text),body=reuse?last.node:element('div','answer');
       if(m.items?.length)outer.append(activity(m.items,ended.get(m.turn),m.turn));
       if(reuse){
-        if(last.text!==m.text)renderLiveAnswer(body,m.text,last.wrapped);
+        renderLiveAnswer(body,m.text,last.wrapped,false);
         body.className='answer';delete body.dataset.key;liveMarkdown.delete(body);finished.delete(key);messageWrap.set(m,last.wrapped)
       }
       else{if(!messageWrap.has(m))messageWrap.set(m,new Set());renderAnswer(body,m.text,messageWrap.get(m))}

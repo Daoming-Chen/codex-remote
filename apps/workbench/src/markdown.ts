@@ -6,7 +6,7 @@ import {ParseError, renderToString} from 'katex';
 declare global {
   interface Window {
     renderMarkdown: (text: string) => string;
-    renderMarkdownBlocks: (text: string) => string[];
+    renderMarkdownBlocks: (text: string, streaming?: boolean) => string[];
   }
 }
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
@@ -27,8 +27,8 @@ markdown.use(tex, {
 });
 
 window.renderMarkdown = text => markdown.render(text);
-window.renderMarkdownBlocks = text => {
-  const environment = {streaming:true};
+window.renderMarkdownBlocks = (text, streaming = true) => {
+  const environment = {streaming};
   const tokens = markdown.parse(text, environment);
   const blocks: string[] = [];
   let start = 0;
