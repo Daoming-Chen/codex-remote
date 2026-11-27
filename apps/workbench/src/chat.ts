@@ -1005,14 +1005,18 @@ function mountSideChat(container,owner,chat){
   let displayedImages=[];
   function sync(){
     if(!container.isConnected)return;
-    const rows=chat.messages.filter(m=>m.text||m.images?.length);
-    if(chat.pending&&chat.preview)rows.push({role:'assistant',text:chat.preview});
+    const ordered=chat.pending&&orderedSnapshots.get(chat);
+    const rows=(ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)
+      .filter(m=>m.text||m.images?.length||m.role==='steps');
+    if(!ordered?.length&&chat.pending&&chat.preview)rows.push({role:'assistant',text:chat.preview});
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
-    const content=JSON.stringify(rows.map(m=>[m.role,m.text]));
+    const content=JSON.stringify(rows.map(m=>[m.role,m.text,m.explanation,m.steps]));
     if(content!==last||rows.some((m,i)=>m.images!==displayedImages[i])){
       const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
       last=content;displayedImages=rows.map(m=>m.images);transcript.replaceChildren();
-      for(const {role,text,images} of rows){
+      for(const row of rows){
+        const {role,text,images}=row;
+        if(role==='steps'||role==='plan'){transcript.append(planCard(row));continue}
         const message=element('div',role==='user'?'side-question':'markdown');
         if(role==='user'){
           message.textContent=text||'';
