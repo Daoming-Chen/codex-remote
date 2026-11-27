@@ -1053,6 +1053,10 @@ function mountSideChat(container,owner,chat){
       return
     }
     const draft=field.value.trim();
+    if(/^\/side(?:\s|$)/.test(draft)){
+      toast('侧边聊天中无法使用 /side。请先返回主聊天');
+      return
+    }
     if(new TextEncoder().encode(draft).length>16000){toast('单条消息最多 16 KB');return}
     try{
       if(!chat.thread&&!await prepareThread())return;

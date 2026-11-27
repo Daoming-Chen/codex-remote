@@ -677,6 +677,13 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.locator('#header-options').tap();
     await page.getByRole('button',{name:'新建侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
+    for(const command of ['/side','/side 帮我看看']){
+      await sideDraft.fill(command);
+      await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
+      await page.locator('#toast').getByText('侧边聊天中无法使用 /side。请先返回主聊天',{exact:true}).waitFor();
+      assert.equal(await sideDraft.inputValue(),command);
+      assert.equal(sideSubmissions,0);
+    }
     // WebView 83 drops :has() selectors. Shrink the available height as an IME would.
     await page.evaluate(()=>{
       for(const sheet of document.styleSheets)for(const rule of Array.from(sheet.cssRules)){
