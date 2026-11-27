@@ -475,7 +475,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       const chat={id:thread,thread,cwd:root,projectId:project.id,messages,draft:'保留草稿',files:[],title:'已有聊天',updated:Date.now()};
       localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:chat.id,chats:[chat],hostProjects:[project]}));
     },{scope,root,thread,project,messages});
-    await page.route(proxy+'/**',route=>route.fulfill({contentType:'text/html',body:'QA Web app'}));
+    await page.route(proxy+'/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:'QA Web app <input aria-label="备注">'}));
     await page.route(origin+'/**',async route=>{
       const path=new URL(route.request().url()).pathname;
       if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
@@ -546,6 +546,14 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await box.fill('localhost:5173/demo?q=1#view');
     await page.getByRole('option',{name:'http://localhost:5173/demo?q=1#view'}).tap();
     await page.frameLocator('iframe[title="主机网页预览"]').getByText('QA Web app').waitFor();
+    const previewPage=page.frameLocator('iframe[title="主机网页预览"]');
+    await previewPage.getByRole('textbox',{name:'备注'}).fill('未提交的修改');
+    await page.getByRole('button',{name:'收起工作区',exact:true}).tap();
+    await page.getByRole('button',{name:'显示标签页',exact:true}).tap();
+    await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
+    await page.getByRole('dialog').getByRole('button',{name:'文件资源管理器',exact:true}).tap();
+    await page.locator('#work-tabs .work-tab').filter({hasText:'浏览器'}).tap();
+    assert.equal(await previewPage.getByRole('textbox',{name:'备注'}).inputValue(),'未提交的修改');
     assert.equal(requestedPort,5173);
     assert.equal(await page.locator('iframe[title="主机网页预览"]').getAttribute('src'),proxy+'/demo?q=1#view');
     await page.getByRole('textbox',{name:'主机网页地址'}).fill('localhost:5174');

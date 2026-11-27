@@ -50,7 +50,6 @@ dialog.model-menu::backdrop{background:transparent}
   [data-theme=dark] .work-tab-wrap:has(.work-tab[aria-pressed=true]){background:#2a2a2a}
 }
 #work-detail{padding:12px;overflow:auto}
-#work-detail.showing-browser{display:flex;flex:1;min-height:0;padding:0}
 #work-detail:has(>.side-chat){display:flex;flex:1;min-height:0}
 .side-chat{display:flex;flex:1;min-width:0;flex-direction:column;gap:8px}
 .side-chat-history{flex:1;min-height:0;overflow:auto;overflow-wrap:anywhere}
@@ -66,7 +65,7 @@ dialog.model-menu::backdrop{background:transparent}
 .side-chat form button svg{width:18px;height:18px}.side-chat form button:disabled{opacity:.45}
 .side-chat-stop{width:10px;height:10px;background:currentColor;border-radius:2px}
 .rail-profile[data-offline]{position:relative}.rail-profile[data-offline]::after{content:'';position:absolute;right:0;bottom:0;width:8px;height:8px;border-radius:50%;background:#ce842c;border:2px solid var(--side)}
-.host-browser{display:flex;flex-direction:column;flex:1;min-width:0}
+.host-browser{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
 .host-browser form,.preview-ports{display:flex;flex-wrap:wrap;gap:6px;padding:8px}
 .host-browser form{border-bottom:1px solid var(--edge)}
 .host-browser input{flex:1;min-width:0;background:var(--bg);color:inherit;border:1px solid var(--edge);border-radius:8px;padding:6px 10px}

@@ -1254,7 +1254,13 @@ function renderWorkbench(){
   const home=!chat.messages.length&&!chat.thread;
   const emptyPanel=!!chat.emptyPanelOpen&&!summary&&!view?.ids.length;
   const hidden=!!(chat.workHidden&&(summary||view?.ids.length));
-  detail.classList.toggle('showing-browser',!summary&&!hidden&&view?.active===browserTab.id);
+  let browser=pane.querySelector(':scope > .host-browser');
+  if(browser&&(browser.dataset.owner!==chat.id||!view?.ids.includes(browserTab.id))){
+    browser.remove();browser=null
+  }
+  const showingBrowser=!summary&&!hidden&&view?.active===browserTab.id;
+  if(browser)browser.hidden=!showingBrowser;
+  detail.hidden=showingBrowser;
   $('header-options').hidden=home;
   WorkbenchComponents.renderPanelToggle($('home-panel-toggle'),home,emptyPanel||!hidden&&!summary&&!!view?.ids.length,toggleWorkPanel);
   const empty=$('empty-work-panel'),searchKey=JSON.stringify([chat.id,chat.cwd,chat.thread]);
@@ -1277,7 +1283,7 @@ function renderWorkbench(){
   }
   $('work-tab-list').hidden=summary;
   $('header-summary').setAttribute('aria-pressed',String(summary&&!hidden));
-  if(hidden){pane.hidden=true;if(detail.querySelector('.host-browser'))detail.replaceChildren();return}
+  if(hidden){pane.hidden=true;return}
   if(summary){rememberWorkScroll(detail);pane.hidden=false;previousTabs='';previousDetail=null;renderThreadSummary(chat);return}
   summarySnapshot=null;
   pane.hidden=!view?.ids.length;
@@ -1345,6 +1351,14 @@ function renderWorkbench(){
   tabs.querySelector('.work-tab[aria-pressed="true"]')?.parentElement.scrollIntoView({block:'nearest',inline:'nearest'});
   }
   const record=openRecords.find(x=>x.id===activeRecord);
+  if(record===browserTab){
+    detail.hidden=true;
+    if(!browser){
+      browser=element('section','panel-tool host-browser');browser.dataset.owner=chat.id;
+      pane.append(browser);mountHostBrowser(browser,chat)
+    }
+    browser.hidden=false;return
+  }
   if(panelTools.has(record.id)||record.type==='sideChat'){
     const identity=JSON.stringify([chat.id,chat.projectId,chat.cwd,record.id]);
     if(detail.firstElementChild?.dataset.toolIdentity!==identity){
@@ -1353,7 +1367,6 @@ function renderWorkbench(){
       detail.replaceChildren(container);
       if(record===projectFilesTab)mountProjectFiles(container,chat);
       else if(record.type==='sideChat')mountSideChat(container,chat,sideChats.find((side,index)=>sideRecord(side,index).id===record.id));
-      else mountHostBrowser(container,chat)
     }
     return
   }
@@ -1569,7 +1582,7 @@ $('messages').addEventListener('click',event=>{
   const href=link?.getAttribute('href');
   if(hostBrowserAddress(href)){
     event.preventDefault();const chat=current();chat.browserAddress=href;
-    $('work-detail').querySelector('.host-browser')?.remove();
+    $('workbench').querySelector(':scope > .host-browser')?.remove();
     openRecord(browserTab);return
   }
   const target=chatFileTarget(href);
