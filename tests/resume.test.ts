@@ -36,7 +36,7 @@ test('restarted discovery owns the device list when the superseded host replies 
   assert.equal(attempts,2,'a superseded response must not launch another discovery');
 });
 
-test('network resume replaces a hanging tablet device-list request', async () => {
+for (const hidden of [false,true]) test('network resume replaces a hanging tablet device-list request, hidden=' + hidden, async () => {
   const browser = await launch();
   try {
     const page = await browser.newPage({serviceWorkers:'block',hasTouch:true,viewport:{width:820,height:920}});
@@ -57,7 +57,14 @@ test('network resume replaces a hanging tablet device-list request', async () =>
     await page.goto(origin + '/devices');
     const stale = await pending;
     const aborted = page.waitForEvent('requestfailed',req => req === stale);
-    await page.evaluate(() => window.receiverNetworkResumed!());
+    await page.evaluate(hidden => {
+      if (hidden) Object.defineProperty(document,'hidden',{value:true,configurable:true});
+      window.receiverNetworkResumed!();
+      if (hidden) {
+        Reflect.deleteProperty(document,'hidden');
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+    },hidden);
     await aborted;
     const device = page.getByRole('button',{name:/恢复测试主机.*在线/});
     await device.waitFor();

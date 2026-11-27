@@ -78,13 +78,17 @@ function DeviceDirectory() {
     }
     const stopTimer = () => window.clearTimeout(timer);
     const resume = () => {
-      if (document.hidden) return;
       resumeNetwork = true;
+      if (document.hidden) return;
       if (pending) { queued = true; pending.abort(); }
       else void load();
     };
     window.receiverNetworkResumed = resume;
-    const visibility = () => document.hidden ? stopTimer() : void load();
+    const visibility = () => {
+      if (document.hidden) stopTimer();
+      else if (resumeNetwork) resume();
+      else void load();
+    };
     const show = (event: PageTransitionEvent) => { if (event.persisted) void load() };
     refresh.current = load;
     window.receiverAuthorized = () => {
