@@ -16,13 +16,17 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
     let job='',mode='',answer:unknown;
     await page.addInitScript(({scope,parent})=>{
-      const chat={id:parent,thread:parent,title:'计划',messages:[{role:'user',text:'主任务'}],draft:'',files:[],collaborationMode:'plan'};
+      const chat={id:parent,thread:parent,title:'计划',messages:[{role:'user',text:'主任务'}],draft:'',files:[],collaborationMode:'plan',
+        threadConfig:{model:'alpha',effort:'high'}};
       localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:parent,chats:[chat]}));
     },{scope,parent});
     await page.route(origin+'/**',async route=>{
       const path=new URL(route.request().url()).pathname;
       if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(await readFile(assets+'/index.html','utf8'),{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
       if(path===base+'/api/thread-fork')return route.fulfill({json:{thread:child}});
+      if(path===base+'/api/models')return route.fulfill({json:{
+        models:['alpha','bravo'].map(id=>({id,name:id,efforts:['low','high'],defaultEffort:'low'})),
+        defaults:{model:'alpha',effort:'low'}}});
       if(path===base+'/api/turn'){
         const request=route.request().postDataJSON();mode=request.collaborationMode;job=request.id;
         assert.equal(request.expectedThread,child);return route.fulfill({json:{id:job}});
@@ -41,11 +45,17 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.goto(origin+base+'/');
     await page.keyboard.press('Control+Alt+s');
     await page.locator('#plan-mode').click();
+    await page.locator('#model-picker').click();
+    await page.locator('.model-view-toggle').click();
+    await page.getByRole('menuitemradio',{name:'bravo',exact:true}).click();
+    await page.keyboard.press('Escape');
     const side=page.locator('.side-chat');
     await side.locator('textarea').fill('讨论计划');
     const submitted=page.waitForResponse(res=>res.url()===origin+base+'/api/turn');
     await side.getByRole('button',{name:'发送',exact:true}).tap();
-    await submitted;
+    const selection=(await submitted).request().postDataJSON();
+    assert.equal(selection.model,'alpha');
+    assert.equal(selection.effort,'high');
     assert.equal(mode,'plan');
     await side.getByRole('radio',{name:'表格'}).check();
     assert.equal(await page.locator('#pending-questions').getByText('选择交付格式').count(),0);

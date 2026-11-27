@@ -971,7 +971,11 @@ function createSideChat(owner){
   const list=attachedSideChats(owner);
   const openTabs=owner.workView?.ids||[];
   const sideChatNumber=1+list.filter((side,index)=>openTabs.includes(sideRecord(side,index).id)).length;
-  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId,sideChatNumber,collaborationMode:owner.collaborationMode||'default'});
+  const {model,effort}=composerModel(owner);
+  const chat=Object.assign(newChat(),{
+    cwd:owner.cwd,projectId:owner.projectId,sideChatNumber,collaborationMode:owner.collaborationMode||'default',
+    model,effort,selectedForNext:!!model,speedChoice:owner.speedChoice?.model===model?owner.speedChoice:undefined
+  });
   list.push(chat);return sideRecord(chat,list.length-1)
 }
 document.addEventListener('keydown',event=>{
@@ -1044,7 +1048,7 @@ function mountSideChat(container,owner,chat){
       }
       const id=crypto.randomUUID();chat.pending=id;chat.preview='';chat.phase='正在发送…';
       chat.outbox={id,draft,files:[],options:{expectedThread:chat.thread||null,parent:chat.parent,cwd:chat.cwd||null,projectId:chat.projectId||null,
-        collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(owner)}};
+        collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(chat)}};
       chat.messages.push({role:'user',text:draft,submissionId:id});
       if(chat.draft.trim()===draft){chat.draft='';field.value=''}
       save();void poll(chat,true)
