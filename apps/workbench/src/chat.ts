@@ -5069,7 +5069,10 @@ if(location.hash==='#new-window'){
   void openCachedChat(db.chats.find(chat=>chat.id===deviceHistoryEntry(browserHistory.state)?.id)||current()||db.chats[0],true)
 }
 restoreDestination(deviceHistoryEntry(browserHistory.state)?.destination);
-for(const c of db.chats)if(c.pending)void poll(c);
+for(const chat of db.chats){
+  if(chat.pending)void poll(chat);
+  for(const side of attachedSideChats(chat))if(side.pending)void poll(side)
+}
 void refreshSidebar();
 syncDirectoryEvents();
 document.addEventListener('visibilitychange',syncDirectoryEvents);

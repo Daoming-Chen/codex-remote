@@ -470,7 +470,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     const proxy='http://dsh-'+'c'.repeat(48)+'.localhost:5173';
     let requestedPort=0,readPath='';
     const childThread='00000000-0000-4000-8000-000000000012';
-    let sideJob='';
+    let sideJob='',sideComplete=false,sideSubmissions=0;
     await page.addInitScript(({scope,root,thread,project,messages})=>{
       const chat={id:thread,thread,cwd:root,projectId:project.id,messages,draft:'保留草稿',files:[],title:'已有聊天',updated:Date.now()};
       localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:chat.id,chats:[chat],hostProjects:[project]}));
@@ -501,11 +501,13 @@ test('show tabs opens one combobox for project files and approved host web apps 
       if(path===base+'/api/turn'){
         const request=route.request().postDataJSON();
         assert.equal(request.expectedThread,childThread);assert.equal(request.prompt,'侧边草稿');
+        sideSubmissions++;
         sideJob=request.id;
         return route.fulfill({json:{id:sideJob}});
       }
       if(sideJob&&path.startsWith(base+'/api/turn/'+sideJob)){
-        const snapshot={id:sideJob,status:'done',thread:childThread,turn:'side-turn',answer:'侧边回复'};
+        const snapshot={id:sideJob,status:sideComplete?'done':'running',thread:childThread,turn:'side-turn',
+          progress:{message:'侧边处理中'},answer:sideComplete?'侧边回复':''};
         return path.endsWith('/events')
           ? route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'})
           : route.fulfill({json:snapshot});
@@ -572,7 +574,17 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.locator('#work-tabs .work-tab').first().tap();
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
+    await page.locator('.side-chat-history').getByText('侧边处理中',{exact:true}).waitFor();
+    await page.locator('#work-hide').tap();
+    await page.reload();
+    sideComplete=true;
+    await page.waitForFunction(key=>{
+      const owner=JSON.parse(localStorage.getItem(key)||'{}');
+      return owner.sideChats?.some((chat:{messages:{text:string}[]})=>chat.messages.some(m=>m.text==='侧边回复'));
+    },'receiver:'+scope+':tim-ser-chat-record:'+thread,{timeout:5000});
+    await page.getByRole('button',{name:'显示标签页',exact:true}).tap();
     await page.locator('.side-chat-history').getByText('侧边回复',{exact:true}).waitFor();
+    assert.equal(sideSubmissions,1);
     assert.equal(await page.locator('#messages').getByText('侧边回复',{exact:true}).count(),0);
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
   } finally { await browser.close() }
