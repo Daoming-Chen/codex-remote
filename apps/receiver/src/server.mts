@@ -573,13 +573,14 @@ async function openHistory(mode,thread){
   // Each HTTP response attaches its own live-turn or continuation fields.
   return {...await flight}
 }
-let directoryFlight;
+let directoryFlight,hasLoadedDirectory=false;
 async function firstDirectoryPage(){
   if(!directoryFlight){
     const flight=remoteThreads('list','-').finally(()=>{if(directoryFlight===flight)directoryFlight=null});
     directoryFlight=flight
   }
   const page=await directoryFlight;
+  hasLoadedDirectory=true;
   // Each HTTP response adds locally running threads to its own list.
   return {...page,items:[...page.items]}
 }
@@ -1378,6 +1379,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     if(req.method==='POST' && req.url?.split('?')[0]==='/api/models'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const cwd=new URL(req.url,origin).searchParams.get('cwd')||'';
+      if(cwd&&!allowedProjects.has(cwd)&&!hasLoadedDirectory)await firstDirectoryPage();
       if(cwd&&!allowedProjects.has(cwd))return json(400,{error:'未知主机项目'});
       return json(200,await models(cwd))
     }
