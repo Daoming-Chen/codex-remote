@@ -51,7 +51,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     let job='',mode='',answer:unknown,forks=0;
     await page.addInitScript(({scope,parent})=>{
       const chat={id:parent,thread:parent,title:'计划',messages:[{role:'user',text:'主任务'}],draft:'',files:[],collaborationMode:'plan',
-        threadConfig:{model:'alpha',effort:'high'}};
+        threadConfig:{model:'alpha',effort:'high'},threadServiceTier:'ultrafast',speedChoice:{model:'alpha',id:'default'}};
       localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:parent,chats:[chat]}));
     },{scope,parent});
     await page.route(origin+'/**',async route=>{
@@ -102,6 +102,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     assert.equal(forks,1);
     assert.equal(selection.model,'alpha');
     assert.equal(selection.effort,'high');
+    assert.equal(selection.serviceTier,'default');
     assert.equal(mode,'plan');
     await side.locator('.plan-steps li[data-status="inProgress"]').getByText('确认交付格式').waitFor();
     assert.equal(await page.locator('#messages .turn-plan').count(),0);
@@ -445,7 +446,9 @@ test('restore a streaming turn after sending on another device with the same thr
   } finally { await browser.close() }
 });
 
-for (const mode of ['daemon', 'native', 'legacy'] as const) test('touch selection sends the model and effort shown by the tablet composer · ' + mode, async () => {
+for (const [mode,tier,expectedTier] of [
+  ['daemon','Fast','priority'],['native','Ultrafast','ultrafast'],['native','标准','default'],['legacy','Ultrafast',null],
+] as const) test('touch selection sends the model and effort shown by the tablet composer · ' + mode + ' · ' + tier, async () => {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
   try {
@@ -478,7 +481,7 @@ for (const mode of ['daemon', 'native', 'legacy'] as const) test('touch selectio
         canSetServiceTier: mode !== 'legacy',
         models: ['alpha', 'bravo'].map(id => ({id, name: id, isDefault: id === 'alpha',
           serviceTiers: [{id: 'priority',name: 'Fast'}, {id: 'ultrafast',name: 'Ultrafast'}],
-          efforts: ['low', 'medium', 'high'], defaultEffort: 'low'})), defaults: {model: 'alpha', effort: 'low'},
+          efforts: ['low', 'medium', 'high'], defaultEffort: 'low'})), defaults: {model: 'alpha', effort: 'low',serviceTier:'ultrafast'},
       }});
       if (path === base + '/api/native-capability') return route.fulfill({json: {native: mode !== 'daemon'}});
       if (path === base + '/api/turn') return route.fulfill({json: {id: route.request().postDataJSON().id}});
@@ -526,7 +529,6 @@ for (const mode of ['daemon', 'native', 'legacy'] as const) test('touch selectio
       await page.setViewportSize({width:960,height:720});
       await page.locator('.speed-trigger').tap();
     }
-    const tier = mode === 'daemon' ? 'Fast' : 'Ultrafast';
     const choice = page.getByRole('menuitemradio', {name: tier,exact:true});
     if (mode === 'legacy') {
       assert(await choice.isDisabled());
@@ -549,7 +551,7 @@ for (const mode of ['daemon', 'native', 'legacy'] as const) test('touch selectio
     const submitted = page.waitForRequest(req => req.url() === origin + base + '/api/turn' && req.method() === 'POST');
     await page.locator('#send').tap();
     const payload = (await submitted).postDataJSON();
-    assert.equal(payload.serviceTier, mode === 'legacy' ? null : mode === 'daemon' ? 'priority' : 'ultrafast');
+    assert.equal(payload.serviceTier,expectedTier);
     assert.deepEqual([payload.model, payload.effort, payload.prompt], ['bravo', 'high', '测试模型选择']);
     assert.deepEqual(errors.map(e=>e.message),[]);
   } finally { await browser.close() }
