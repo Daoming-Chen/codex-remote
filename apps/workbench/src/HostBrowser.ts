@@ -144,7 +144,7 @@ export function mountHostBrowser(container: HTMLElement, options: BrowserOptions
     try {
       const result = await request('ports');
       if (!container.isConnected || version !== revision) return;
-      status.textContent = result.ports.length ? '选择主机端口' : '请在主机的 Remote 设置中添加网页服务的预览端口。';
+      status.textContent = result.ports.length ? '选择主机端口' : '主机尚未放行预览端口。请在主机的 Remote 设置中保存允许的端口，然后刷新端口列表。';
       for (const port of result.ports) {
         const button = document.createElement('button');
         button.textContent = 'localhost:' + port;

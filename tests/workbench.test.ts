@@ -606,6 +606,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     const assets=process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/',import.meta.url));
     const proxy='http://dsh-'+'c'.repeat(48)+'.localhost:5173';
     let requestedPort=0,readPath='';
+    let allowedPorts:number[]=[];
     const childThread='00000000-0000-4000-8000-000000000012';
     let sideJob='',sideComplete=false,sideSubmissions=0;
     await page.addInitScript(({scope,root,thread,project,messages})=>{
@@ -629,7 +630,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
         readPath=route.request().postDataJSON().path;
         return route.fulfill({json:{source:'working-tree',text:'项目文件内容\n'.repeat(180)}});
       }
-      if(path===base+'/api/web-preview/ports')return route.fulfill({json:{ports:[5173]}});
+      if(path===base+'/api/web-preview/ports')return route.fulfill({json:{ports:allowedPorts}});
       if(path===base+'/api/thread-fork'){
         const request=route.request().postDataJSON();
         assert.equal(request.thread,thread);assert.equal(request.sideChat,true);
@@ -683,6 +684,9 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await box.fill('localhost:5174');
     await page.getByRole('option',{name:'http://localhost:5174/'}).tap();
     await page.getByText('主机未允许此端口').waitFor();
+    await page.getByRole('button',{name:'刷新端口'}).tap();
+    await page.getByText(/主机尚未放行预览端口/).waitFor();
+    allowedPorts=[5173];
     await page.getByRole('button',{name:'刷新端口'}).tap();
     await page.getByRole('button',{name:'localhost:5173'}).waitFor();
     await page.getByRole('button',{name:'关闭 浏览器',exact:true}).tap();
