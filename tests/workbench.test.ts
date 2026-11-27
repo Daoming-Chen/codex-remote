@@ -120,10 +120,25 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await (await choosing).setFiles({name:'side-note.txt',mimeType:'text/plain',buffer:Buffer.from('侧聊附件正文')});
     await side.getByText('side-note.txt',{exact:true}).waitFor();
     assert.equal(await page.locator('#attachment').getByText('side-note.txt').count(),0);
+    const pastedImage=await editor.evaluate(async field=>{
+      const image=document.createElement('canvas');image.width=image.height=2;
+      const blob=await new Promise<Blob>(resolve=>image.toBlob(data=>resolve(data!),'image/png'));
+      const clipboardData=new DataTransfer();
+      clipboardData.setData('text/plain','附件');
+      clipboardData.items.add(new File([blob],'侧聊截图.png',{type:'image/png'}));
+      if(!(field instanceof HTMLTextAreaElement))throw Error('missing side chat editor');
+      field.setSelectionRange(2,4);
+      field.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));
+      return image.toDataURL()
+    });
+    await side.getByRole('button',{name:'查看侧聊截图.png'}).waitFor();
+    assert.equal(await editor.inputValue(),'讨论附件');
+    assert.equal(await page.locator('#attachment .chip').count(),0);
     const submitted=page.waitForResponse(res=>res.url()===origin+base+'/api/turn');
     await side.getByRole('button',{name:'发送',exact:true}).tap();
     const selection=(await submitted).request().postDataJSON();
-    assert.equal(selection.prompt,'讨论计划\n\n文件：side-note.txt\n侧聊附件正文');
+    assert.equal(selection.prompt,'讨论附件\n\n文件：side-note.txt\n侧聊附件正文');
+    assert.deepEqual(selection.images,[pastedImage]);
     assert.equal(forks,1);
     assert.equal(selection.model,'charlie');
     assert.equal(selection.effort,'high');
@@ -616,7 +631,7 @@ test('browse the selected host project and read nested working files on a tablet
       const path = new URL(route.request().url()).pathname;
       if (path === base + '/') return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
         await readFile(directory + '/index.html','utf8'), {deviceName:'文件主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
-      if (path === base + '/api/threads') return route.fulfill({json:{items:[],projects:[project]}});
+      if (path === base + '/api/threads') return route.fulfill({json:{items:[],projects:[project,{id:'second-project',name:'第二项目',roots:['C:\\dev\\second'] }]}});
       if (path === base + '/api/project-directories') {
         const {relative,workspace} = route.request().postDataJSON();
         assert.equal(workspace,root);
@@ -657,6 +672,19 @@ test('browse the selected host project and read nested working files on a tablet
     await page.getByRole('button',{name:'查看 Markdown 预览'}).tap();
     await preview.getByText('查看正文').tap();
     await page.locator('.snapshot-code mark').waitFor();
+    await page.locator('#work-hide').tap();
+    await page.locator('#prompt').fill('读取已选文件');
+    await page.locator('#attach-menu').tap();
+    await page.getByRole('menuitem',{name:'添加远程文件'}).tap();
+    await page.getByRole('textbox',{name:'项目内的相对路径'}).fill('src/note.txt');
+    await page.getByRole('button',{name:'添加路径'}).tap();
+    await page.getByRole('button',{name:'选择远程项目',exact:true}).tap();
+    await page.locator('#dialog').getByRole('button',{name:/第二项目/}).tap();
+    assert.equal(await page.locator('#prompt').inputValue(),'读取已选文件');
+    assert.match(await page.locator('#attachment .chip').getAttribute('title')||'',/C:\\dev\\demo\\src\\note\.txt$/);
+    await page.getByRole('button',{name:'在 第二项目 中新建任务'}).tap();
+    assert.equal(await page.locator('#attachment .chip').count(),0);
+    assert.equal(await page.locator('#prompt').inputValue(),'');
   } finally { await browser.close() }
 });
 

@@ -1016,6 +1016,7 @@ function mountSideChat(container,owner,chat){
   const empty=element('div','side-chat-empty');
   empty.append(icon('side-chat-new'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
   field.placeholder=composerPlaceholder(chat,true);field.setAttribute('aria-label','在侧边聊天中提问');
+  field.addEventListener('paste',event=>pasteComposerImages(event,chat));
   field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;fitEditor(field);save();sync()};
   field.onkeydown=event=>{
     if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
@@ -3772,7 +3773,7 @@ async function addTextFiles(batch,offerCopies=true,c=current()){
     else if(visibleSideChat?.chat===c)visibleSideChat.sync()
   }
 }
-$('prompt').addEventListener('paste',event=>{
+function pasteComposerImages(event,chat){
   const files=Array.from(event.clipboardData?.files||[]).filter(file=>['image/png','image/jpeg','image/webp'].includes(file.type));
   if(!files.length)return;
   event.preventDefault();
@@ -3782,8 +3783,9 @@ $('prompt').addEventListener('paste',event=>{
     input.setRangeText(text,input.selectionStart,input.selectionEnd,'end');
     input.dispatchEvent(new Event('input',{bubbles:true}))
   }
-  void addTextFiles(files)
-});
+  void addTextFiles(files,true,chat)
+}
+$('prompt').addEventListener('paste',event=>pasteComposerImages(event,current()));
 const promptBox=$('prompt');
 function fitEditorViewport(){
   const layout=$('layout'),height=window.visualViewport?.height||window.innerHeight;
