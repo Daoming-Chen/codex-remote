@@ -195,15 +195,21 @@ test('reopening after an offline directory lookup restores the saved device when
     const page = await browser.newPage();
     await page.addInitScript(id => localStorage.setItem('codex-receiver-selected-device', id), host.deviceId);
     let online = false;
+    let directoryAvailable = false;
     await page.route(origin + '/**', route => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/devices') return route.fulfill({path:resolve(assets,'devices.html')});
-      if (path === '/api/devices') return route.fulfill({json:{devices:[{...host,online}]}});
+      if (path === '/api/devices') return directoryAvailable
+        ? route.fulfill({json:{devices:[{...host,online}]}})
+        : route.fulfill({status:503,json:{code:'CONNECTION_FAILED',error:'无法连接 Remote 服务。'}});
       if (path === base + '/') return route.fulfill({contentType:'text/html',body:'工作台'});
       return route.abort();
     });
     await page.goto(origin + '/devices#directory-unavailable');
-    await page.getByText(/正在等待上次使用的主机上线/).waitFor();
+    await page.getByText(/无法连接 Remote 服务/).waitFor();
+    directoryAvailable = true;
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.getByText(/正在等待上次使用的主机上线/).waitFor({timeout:4000});
     online = true;
     await page.evaluate(() => window.receiverNetworkResumed!());
     await page.waitForURL(origin + base + '/');

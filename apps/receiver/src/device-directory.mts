@@ -15,8 +15,8 @@ const directoryErrors = new Map([
   ['PEER_IDENTITY_MISMATCH', '主机身份与 Remote 授权记录不一致。请在 Remote 中核对主机。'],
   ['SERVER_CREDENTIALS_LOCK_UNSUPPORTED', '接收端无法锁定授权凭据。请检查接收端版本和存储位置。'],
   ['SERVER_CREDENTIALS_BUSY', '接收端正在更新授权凭据。请稍后刷新设备。'],
-  ['CONNECTION_FAILED', '无法从 Remote 服务获取设备列表。请检查连接后刷新设备。'],
-  ['DIRECTORY_TIMEOUT', '读取 Remote 设备列表超时。请刷新设备。'],
+  ['CONNECTION_FAILED', '无法从 Remote 服务获取设备列表。'],
+  ['DIRECTORY_TIMEOUT', '读取 Remote 设备列表超时。'],
   ['INVALID_MESSAGE', 'Remote 返回的设备或授权信息格式异常。'],
 ]);
 

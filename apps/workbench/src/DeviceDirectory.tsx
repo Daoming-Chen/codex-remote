@@ -43,7 +43,10 @@ function DeviceDirectory() {
           data = await response.json();
         } finally { clearTimeout(timeout); pending = undefined; }
         if (queued || lifetime.signal.aborted) return;
-        if (!response.ok || !Array.isArray(data.devices) || !data.devices.every(isRemoteDevice)) throw Error(data.error || '无法获取设备');
+        if (!response.ok || !Array.isArray(data.devices) || !data.devices.every(isRemoteDevice)) {
+          const retrying = data.code === 'CONNECTION_FAILED' || data.code === 'DIRECTORY_TIMEOUT';
+          throw Error((data.error || '无法获取设备') + (retrying ? ' 将自动重试。' : ''));
+        }
         const list: Device[] = data.devices;
         const previous = localStorage.getItem(selectionKey);
         const saved = list.find(device => device.deviceId === previous);
@@ -97,6 +100,7 @@ function DeviceDirectory() {
       void load();
     };
     document.addEventListener('visibilitychange', visibility);
+    window.addEventListener('online', resume);
     window.addEventListener('pageshow', show);
     window.addEventListener('pagehide', stopTimer);
     void load();
@@ -105,6 +109,7 @@ function DeviceDirectory() {
       delete window.receiverNetworkResumed;
       delete window.receiverAuthorized;
       document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener('online', resume);
       window.removeEventListener('pageshow', show);
       window.removeEventListener('pagehide', stopTimer);
     };
