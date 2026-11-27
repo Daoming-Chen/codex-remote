@@ -895,3 +895,7 @@ html[data-theme=dark] #side .sidebar-wait{background:#242d3f;color:#339cff}
   .android-receiver #layout.collapsed #side{display:none}
   .android-receiver #layout:is(.collapsed,.compact-review):not(.drawer) #app-rail .mobile-new-chat{display:grid}
 }
+.project-markdown{min-width:0;overflow-x:auto;overflow-wrap:anywhere}
+.project-markdown table{border-collapse:collapse}
+.project-markdown :is(th,td){padding:.35em .65em;border:1px solid currentColor}
+.task-list-item{list-style:none}

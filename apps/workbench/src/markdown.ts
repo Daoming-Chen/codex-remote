@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it';
+import {tasklist} from '@mdit/plugin-tasklist';
 
 declare global {
   interface Window {
@@ -8,6 +9,7 @@ declare global {
 }
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
 markdown.disable('image');
+markdown.use(tasklist, {label:false});
 
 window.renderMarkdown = text => markdown.render(text);
 window.renderMarkdownBlocks = text => {

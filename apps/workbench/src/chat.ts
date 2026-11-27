@@ -2559,6 +2559,30 @@ function mountProjectFiles(detail,chat){
           if(!response.ok||typeof data.text!=='string')throw Error(data.error||'无法读取文件');
           if(!active()||run!==generation||id!==readId)return;
           const pre=element('pre','snapshot-code',data.text);result.replaceChildren(pre);
+          if(/\.(?:md|markdown)$/i.test(relative)){
+            const preview=element('article','markdown project-markdown');
+            renderAnswer(preview,data.text);
+            for(const link of preview.querySelectorAll('a')){
+              const target=chatFileTarget(link.getAttribute('href'));
+              if(!target)continue;
+              link.onclick=event=>{
+                event.preventDefault();event.stopPropagation();
+                let file;
+                try{file=decodeURIComponent(target.filename)}catch{return}
+                const directory=projectEntryPath(root,relative).replace(/[\\/][^\\/]+$/,'');
+                const absolute=resolveChatFile(file,directory),prefix=trim(cwd).replace(/\/+$/,'')+'/';
+                if(!absolute.startsWith(prefix)){toast('文件不在当前项目目录中');return}
+                void openFile((base?base+'/':'')+absolute.slice(prefix.length),null,Number(target.line)||null)
+              }
+            }
+            const toggle=element('button','modal-row');toggle.type='button';
+            function showSource(source){
+              preview.hidden=source;pre.hidden=!source;
+              toggle.textContent=source?'查看 Markdown 预览':'查看 Markdown 源码'
+            }
+            toggle.onclick=()=>showSource(pre.hidden);
+            result.replaceChildren(toggle,preview,pre);showSource(!!line)
+          }
           if(line){
             const lines=data.text.split(/\r?\n/);
             if(line<=lines.length&&line>=1){

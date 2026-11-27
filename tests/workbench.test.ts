@@ -579,6 +579,7 @@ test('browse the selected host project and read nested working files on a tablet
     const root = 'C:\\dev\\demo', project = {name:'平板项目', id:'fixture-project', roots:[root]};
     const directory = process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/',import.meta.url));
     let snapshot: unknown;
+    const markdown='# 说明\n\n- [x] 完成\n\n|文件|大小|\n|---|---|\n|示例|1|\n\n```ts\nconst a = 1;\n```\n\n[查看正文](note.txt#L1)\n\n<b>原文</b>';
     await page.route(origin + '/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === base + '/') return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
@@ -587,11 +588,11 @@ test('browse the selected host project and read nested working files on a tablet
       if (path === base + '/api/project-directories') {
         const {relative,workspace} = route.request().postDataJSON();
         assert.equal(workspace,root);
-        return route.fulfill({json:{folders:relative ? [] : ['src'],files:relative ? ['note.txt'] : []}});
+        return route.fulfill({json:{folders:relative ? [] : ['src'],files:relative ? ['note.txt','README.MD'] : []}});
       }
       if (path === base + '/api/project-file-snapshot') {
         snapshot = route.request().postDataJSON();
-        return route.fulfill({json:{source:'working-tree', text:'今天的工作区内容 <b>文本</b>'}});
+        return route.fulfill({json:{source:'working-tree', text:route.request().postDataJSON().path.endsWith('.MD')?markdown:'今天的工作区内容 <b>文本</b>'}});
       }
       if (path.includes('/api/')) return route.fulfill({json:{native:true, items:[],projects:[],models:[]}});
       return route.fulfill({path:directory + path});
@@ -611,6 +612,19 @@ test('browse the selected host project and read nested working files on a tablet
     await page.locator('.project-explorer-reader pre').waitFor();
     await page.getByRole('button',{name:'返回文件列表',exact:true}).tap();
     assert(await page.getByRole('button',{name:'note.txt',exact:true}).isVisible());
+    await page.getByRole('button',{name:'README.MD',exact:true}).tap();
+    const preview=page.locator('.project-markdown');
+    await preview.getByRole('heading',{name:'说明'}).waitFor();
+    assert(await preview.getByRole('checkbox').isChecked());
+    assert(await preview.getByRole('checkbox').isDisabled());
+    assert.equal(await preview.locator('td').first().innerText(),'示例');
+    assert.equal(await preview.locator('code').textContent(),'const a = 1;\n');
+    assert.equal(await preview.locator('b').count(),0);
+    await page.getByRole('button',{name:'查看 Markdown 源码'}).tap();
+    assert.equal(await page.locator('pre.snapshot-code:visible').innerText(),markdown);
+    await page.getByRole('button',{name:'查看 Markdown 预览'}).tap();
+    await preview.getByText('查看正文').tap();
+    await page.locator('.snapshot-code mark').waitFor();
   } finally { await browser.close() }
 });
 
