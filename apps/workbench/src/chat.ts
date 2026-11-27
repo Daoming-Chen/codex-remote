@@ -1208,7 +1208,11 @@ function mountSideChat(container,owner,chat){
     }catch{/* The cached branch is available while the host is offline. */}
     finally{readingHistory=false;if(refreshAgain){refreshAgain=false;void refreshHistory()}}
   }
-  function syncSubscription(){
+  function syncSubscription(replace=false){
+    if(replace===true&&sideEvents){
+      sideEvents.close();sideEvents=null;
+      if(externalPreview)externalPreview.disconnected=true
+    }
     const visible=form.isConnected&&form.getClientRects().length&&!document.hidden;
     if(!visible||chat.pending||!chat.thread){
       sideEvents?.close();sideEvents=null;externalPreview=null;externalRows=[];
@@ -4624,6 +4628,7 @@ async function recoverWorkbenchConnection(replace=false){
     if(result.reused!==true||wasOffline){
       directoryEvents?.close();directoryEvents=null;
       threadWatch?.source.close();threadWatch=null;
+      visibleSideChat?.syncSubscription(true);
       window.dispatchEvent(new Event('receiver-reconnected'))
     }
     syncDirectoryEvents();syncThreadWatch();

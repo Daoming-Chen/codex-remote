@@ -156,6 +156,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     let resumed=false;
     let externalDone=false;
+    let connectionReplaced=false;
     let sharedRequest='',sharedAttempts=0;
     let parentReads=0,branchReads=0;
     let holdUpdates=false,releaseUpdates!:()=>void;
@@ -202,7 +203,8 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       if(stop&&path===base+'/api/thread-events/'+thread){
         const text=(delta:string|null)=>'event: text\ndata: '+JSON.stringify(['live-turn','live-item',delta])+'\n\n';
         return route.fulfill({contentType:'text/event-stream',body:externalDone?'data: CHANGED\n\n':
-          'retry: 200\n\n'+text(null)+text('跨端')+text('流式首段')})
+          'retry: '+(connectionReplaced?200:60000)+'\n\n'+text(null)+text('跨端')+text('流式首段')+
+          (connectionReplaced?text('及续段'):'')})
       }
       if(path.startsWith(base+'/api/turn/'+job)){
         if(holdUpdates)await networkRestored;
@@ -245,6 +247,12 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       assert.equal(await messages.getByText('你已停止，已用时 6秒',{exact:true}).count(),1);
       assert.equal(await messages.getByText('已缓存的问题',{exact:true}).count(),1);
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
+      await page.route(origin+base+'/api/resume',route=>{
+        connectionReplaced=true;
+        return route.fulfill({json:{connected:true,reused:false}})
+      });
+      await page.evaluate(()=>window.receiverNetworkResumed?.());
+      await messages.getByText('跨端流式首段及续段',{exact:true}).waitFor({timeout:4000});
       const beforeFinal={parentReads,branchReads};
       const panel=page.locator('.side-chat'),field=panel.locator('textarea');
       await field.fill('侧聊补充');
