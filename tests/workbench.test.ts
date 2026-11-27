@@ -553,7 +553,8 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.getByRole('button',{name:'关闭工作区',exact:true}).tap();
     assert(await page.locator('#workbench').isHidden());
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
-    await page.keyboard.press('Control+Alt+s');
+    await page.locator('#header-options').tap();
+    await page.getByRole('button',{name:'打开侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
     await sideDraft.fill('侧边草稿');
     await page.getByRole('button',{name:'关闭 侧边聊天',exact:true}).tap();
@@ -564,6 +565,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.getByRole('dialog').getByRole('button',{name:'侧边聊天',exact:true}).tap();
     assert.equal(await sideDraft.inputValue(),'');
     assert.equal(await page.locator('#work-tabs .work-tab').count(),2);
+    assert.equal(await page.locator('#work-tabs .work-tab').nth(1).innerText(),'侧边聊天 2');
     await page.locator('#work-tabs .work-tab').first().tap();
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();

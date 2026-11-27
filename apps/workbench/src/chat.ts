@@ -963,7 +963,8 @@ function attachedSideChats(owner){
   return owner.sideChats
 }
 function sideRecord(chat,index){
-  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||sideChatTab.title}
+  const fallback=index?sideChatTab.title+' '+(index+1):sideChatTab.title;
+  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||fallback}
 }
 function createSideChat(owner){
   const list=attachedSideChats(owner);
@@ -2597,6 +2598,11 @@ function positionSidebarMenu(anchor){
   }
 }
 function options(c,anchor=null){const body=modal('聊天选项',anchor);if(anchor?.closest('.history-row'))positionSidebarMenu(anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(anchor?.closest('.history-row'))body.querySelector('button')?.focus();if(c.archived||(!c.thread&&!c.messages?.length))return;
+  if(c.thread&&anchor?.id==='header-options'){
+    body.append(row('打开侧边聊天','message-circle',()=>{
+      closeDialog();openRecord(sideChatTab);document.querySelector('.side-chat textarea')?.focus()
+    }))
+  }
   if(c.thread&&!c.pending&&!c.activeTurn&&!c.archived){const button=row('归档聊天','folder-open',()=>setArchived(c.thread,true,button));body.append(button)}
   if(c.thread&&Array.isArray(db.pinnedThreads)){
     const pinned=db.pinnedThreads.some(item=>item.thread===c.thread);
@@ -2635,7 +2641,8 @@ function options(c,anchor=null){const body=modal('聊天选项',anchor);if(ancho
   }
   if(c.thread&&!c.pending&&c.messages?.length)body.append(row('从此对话创建分支','square-pen',()=>forkChat(c)));
   body.append(row('重命名','pencil',()=>renameChat(c)));
-  if(c.messages?.length)body.append(row('导出 Markdown','download',()=>downloadTranscript(c)))
+  if(c.messages?.length)body.append(row('导出 Markdown','download',()=>downloadTranscript(c)));
+  if(anchor?.id==='header-options')anchorHeaderMenu(anchor)
 }
 function downloadTranscript(c){
   const content=c.messages.map(exportMessage).join('\n\n');
