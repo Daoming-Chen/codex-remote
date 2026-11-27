@@ -1,7 +1,7 @@
 import MarkdownIt from 'markdown-it';
 import {tasklist} from '@mdit/plugin-tasklist';
 import {tex} from '@mdit/plugin-tex';
-import {renderToString} from 'katex';
+import {ParseError, renderToString} from 'katex';
 
 declare global {
   interface Window {
@@ -15,14 +15,20 @@ markdown.use(tasklist, {label:false});
 markdown.use(tex, {
   delimiters: 'all',
   mathFence: true,
-  render(source: string, displayMode: boolean) {
-    return renderToString(source, {displayMode, throwOnError:false, trust:false, maxSize:20});
+  render(source, displayMode, environment) {
+    const streaming = 'streaming' in environment && environment.streaming === true;
+    try {
+      return renderToString(source, {displayMode, throwOnError:streaming, trust:false, maxSize:20});
+    } catch (error) {
+      if (streaming && error instanceof ParseError) return '';
+      throw error;
+    }
   },
 });
 
 window.renderMarkdown = text => markdown.render(text);
 window.renderMarkdownBlocks = text => {
-  const environment = {};
+  const environment = {streaming:true};
   const tokens = markdown.parse(text, environment);
   const blocks: string[] = [];
   let start = 0;

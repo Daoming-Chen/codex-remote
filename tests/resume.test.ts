@@ -43,6 +43,15 @@ test('streamed Markdown lays out TeX with bundled fonts and preserves literal co
     await page.goto(origin+base+'/');
     const messages=page.locator('#messages');
     await messages.locator('.live-answer .katex').nth(1).waitFor();
+    const incomplete=messages.locator('.live-answer');
+    assert.equal(await incomplete.locator('.katex-error').count(),0);
+    const invalid='\x60\x60\x60math\n\\frac{1}{';
+    const partial=await page.evaluate(text=>({
+      live:window.renderMarkdownBlocks(text).join(''),
+      final:window.renderMarkdown(text)
+    }),invalid);
+    assert.equal(partial.live,'');
+    assert.match(partial.final,/katex-error/);
     complete=true;
     await messages.locator('.answer .katex-display').nth(2).waitFor();
     assert.equal(await messages.locator('.katex').count(),5);
