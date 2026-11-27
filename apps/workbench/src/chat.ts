@@ -1032,12 +1032,18 @@ function mountSideChat(container,owner,chat){
   send.type='submit';
   const attach=btn('添加文件等内容','plus',()=>attachmentMenu(attach,picker,chat,field));
   attach.setAttribute('aria-haspopup','menu');attach.setAttribute('aria-expanded','false');
-  actions.append(attach,send);
+  const modelTrigger=$('model-picker').cloneNode(true);
+  modelTrigger.removeAttribute('id');modelTrigger.removeAttribute('data-action');
+  modelTrigger.querySelector('#model-label').removeAttribute('id');
+  modelTrigger.classList.add('side-model-picker');modelTrigger.setAttribute('aria-expanded','false');
+  modelTrigger.onclick=()=>modelPicker(false,false,chat,modelTrigger);
+  actions.append(attach,modelTrigger,send);
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   const entries=[];
   function sync(){
     if(!container.isConnected)return;
+    modelLabel(chat,modelTrigger);
     const ordered=chat.pending&&orderedSnapshots.get(chat);
     const rows=(ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)
       .filter(m=>m.text||m.images?.length||m.role==='steps');
@@ -4114,7 +4120,7 @@ async function confirmSubmission(c,id,firstAttempt){
   }
   return false
 }
-let renderedModelLabel;
+const renderedModelLabels=new WeakMap();
 const observedChats=new WeakMap();
 const foregroundSubmissions=new WeakMap();
 let foregroundRevision=0;
@@ -4659,6 +4665,7 @@ function resumeModelCatalog(event){
   const retry=document.querySelector('dialog.model-menu[open] [data-retry-catalog]');
   if(retry){
     if(catalogNeedsRefresh(cwd))retry.click();
+    else if(menuAnchor?.matches('.side-model-picker'))void modelPicker(false,false,visibleSideChat.chat,menuAnchor);
     else void modelPicker(false,$('dialog').classList.contains('model-command-menu'))
   }else if(!catalogRequests.has(cwd)&&catalogNeedsRefresh(cwd))modelLabel(c)
 }
@@ -4675,7 +4682,7 @@ function fetchModelCatalog(cwd=''){
     if((current()?.cwd||'')===cwd)db.modelCatalog=catalog;
     const defaults=fresh.defaults;
     if(defaults?.model){
-      for(const c of db.chats){
+      for(const c of db.chats.flatMap(owner=>[owner,...(owner.sideChats||(owner.sideChat?[owner.sideChat]:[]))])){
         if((c.cwd||'')!==cwd||!c.selectedForNext||!followsProjectDefault(c))continue;
         c.model=defaults.model;c.effort=defaults.effort||null;
         c.modelName=fresh.models.find(m=>m.id===c.model)?.name||c.model;
@@ -4683,7 +4690,9 @@ function fetchModelCatalog(cwd=''){
       }
     }
     (db.projectModelDefaults||={})[cwd]={defaults:fresh.defaults,updated:Date.now()};save();
-    catalogRetryAfter.delete(cwd);modelLabel(current());return catalog
+    catalogRetryAfter.delete(cwd);modelLabel(current());
+    if(visibleSideChat?.form.isConnected)visibleSideChat.sync();
+    return catalog
   })().catch(error=>{
     catalogRetryAfter.set(cwd,Date.now()+30000);
     if(error.name==='TimeoutError')throw Error('等待主机模型目录超时');
@@ -4698,8 +4707,8 @@ function displayedSpeed(c,model){
     c.thread?c.threadServiceTier:db.projectModelDefaults?.[c.cwd||'']?.defaults?.serviceTier;
   return model?.serviceTiers?.find(tier=>tier.id===id)
 }
-function modelLabel(c){
-  renderContextUsage(c.usage);
+function modelLabel(c,trigger=$('model-picker')){
+  if(trigger===$('model-picker'))renderContextUsage(c.usage);
   const {model,effort}=composerModel(c);
   const cwd=c.cwd||'';
   const entry=projectCatalog(cwd)?.models?.find(entry=>entry.id===model);
@@ -4707,20 +4716,20 @@ function modelLabel(c){
     void fetchModelCatalog(cwd).catch(()=>{});
   const name=entry?.name||(c.model===model&&c.modelName)||model;
   const display=name?.replace(/^gpt-6\.2-(astra|sol)$/i,(_,family)=>'GPT-6.2 '+(family.toLowerCase()==='sol'?'Sol':'Astra'))||'主机默认';
-  const strength=effortName(effort),label=$('model-label');
+  const strength=effortName(effort),label=trigger.querySelector('.model-trigger-content > span');
   const speed=displayedSpeed(c,entry);
   const signature=JSON.stringify([display,strength,speed?.id,speed?.name]);
-  if(signature===renderedModelLabel)return;
-  renderedModelLabel=signature;
+  if(signature===renderedModelLabels.get(trigger))return;
+  renderedModelLabels.set(trigger,signature);
   label.replaceChildren(element('span','model-trigger-name',display));
   if(strength)label.append(element('span','model-strength',' '+strength));
   if(speed&&speed.id!=='default'){
     const indicator=icon(tierIcon(speed.id));indicator.classList.add('model-speed-icon');label.prepend(indicator)
   }
   const description=[label.textContent,speed?.name].filter(Boolean).join(' · ');
-  $('model-picker').title=description;
-  $('model-picker').setAttribute('aria-description',description);
-  $('model-picker').disabled=false
+  trigger.title=description;
+  trigger.setAttribute('aria-description',description);
+  trigger.disabled=false
 }
 function positionCommandMenu(panel){
   const rect=$('composer').getBoundingClientRect(),view=window.visualViewport;
@@ -4749,7 +4758,7 @@ function positionModelMenu(){
     positionCommandMenu(dialog);
     return
   }
-  const anchor=$('model-picker').getBoundingClientRect();
+  const anchor=(menuAnchor||$('model-picker')).getBoundingClientRect();
   const view=window.visualViewport,zoomed=modelViewportConstrained(view);
   dialog.classList.toggle('model-zoomed',zoomed);
   if(zoomed){
@@ -4815,15 +4824,15 @@ window.visualViewport?.addEventListener('resize',resizeModelMenus);
 window.visualViewport?.addEventListener('scroll',repositionModelMenus);
 document.addEventListener('scroll',repositionModelMenus,true);
 new ResizeObserver(repositionModelMenus).observe($('composer'));
-async function modelPicker(force=false,openList=false){
-  const c=current(),dialog=$('dialog');
+async function modelPicker(force=false,openList=false,c=current(),trigger=$('model-picker')){
+  const dialog=$('dialog');
   const retrying=force&&dialog.open&&dialog.classList.contains('model-menu');
-  const body=retrying?$('dialog-body'):modal('模型与推理强度',$('model-picker'));
+  const body=retrying?$('dialog-body'):modal('模型与推理强度',trigger);
   const panel=element('div','results'),status=element('p','quiet',('正在读取 '+receiverName+' 的模型目录…'));
   status.setAttribute('role','status');
   if(retrying)body.replaceChildren();
-  delete $('model-picker').dataset.view;
-  dialog.classList.add('model-menu');dialog.classList.toggle('model-command-menu',openList);$('model-picker').setAttribute('aria-expanded','true');
+  delete trigger.dataset.view;
+  dialog.classList.add('model-menu');dialog.classList.toggle('model-command-menu',openList);trigger.setAttribute('aria-expanded','true');
   positionModelMenu();
   body.append(status,panel);
   try{
@@ -4869,7 +4878,7 @@ async function modelPicker(force=false,openList=false){
       delete c.speedChoice;
       c.pickerChoice={mode:'default',model:defaults.model,effort:defaults.effort||null};c.selectionDuringTurn=c.pending;c.selectedForNext=true;c.model=defaults.model;c.effort=defaults.effort||null;
       c.modelName=data.models.find(m=>m.id===defaults.model)?.name||defaults.model;
-      rememberConfiguration();save();modelLabel(c);finishChoice(data.models.find(m=>m.id===defaults.model))
+      rememberConfiguration();save();modelLabel(c,trigger);finishChoice(data.models.find(m=>m.id===defaults.model))
     }
     function startingHeight(switching){
       if(!switching||matchMedia('(prefers-reduced-motion: reduce)').matches)return 0;
@@ -4900,8 +4909,8 @@ async function modelPicker(force=false,openList=false){
       const name=element('span','model-view-name',model?.name||composerModel(c).model||'默认');
       const effort=element('span','model-view-effort');
       toggle.dataset.explicit=String(explicitlySelected(model?.id));
-      $('model-picker').dataset.view='simple';
-      $('model-picker').querySelector('.model-open-label').textContent=toggle.dataset.explicit==='true'?'选择推理强度':'选择模型';
+      trigger.dataset.view='simple';
+      trigger.querySelector('.model-open-label').textContent=toggle.dataset.explicit==='true'?'选择推理强度':'选择模型';
       toggle.prepend(effort,name);
       const header=element('div','model-view-header');header.append(toggle);panel.append(header);
       if(fromList)animateViewEntry(header,-10,56);
@@ -4916,7 +4925,7 @@ async function modelPicker(force=false,openList=false){
               c.effort=composerModel(c).effort||model.defaultEffort;c.model=model.id;c.modelName=model.name;
               c.selectedForNext=true;c.selectionDuringTurn=c.pending
             }else delete c.speedChoice;
-            rememberConfiguration();save();modelLabel(c);simple(model);panel.querySelector('.speed-trigger').focus()
+            rememberConfiguration();save();modelLabel(c,trigger);simple(model);panel.querySelector('.speed-trigger').focus()
           }
         });
       }
@@ -4932,15 +4941,15 @@ async function modelPicker(force=false,openList=false){
         preview(value){const name=effortName(value);effort.textContent=name;toggle.title='选择模型 · '+model.name+' · '+name},
         commit(value){
           c.selectionDuringTurn=c.pending;c.selectedForNext=true;c.model=model.id;
-          c.modelName=model.name;c.effort=value;rememberConfiguration();save();modelLabel(c)
+          c.modelName=model.name;c.effort=value;rememberConfiguration();save();modelLabel(c,trigger)
         },
-        confirm(){closeDialog();$('model-picker').focus()}
+        confirm(){closeDialog();trigger.focus()}
       });
       if(fromList)animateViewEntry(control,-10,40);
       resizeView(height)
     }
     function list(){
-      $('model-picker').dataset.view='list';
+      trigger.dataset.view='list';
       const fromSlider=!!panel.querySelector('.model-view-header')&&!openList;
       const height=startingHeight(fromSlider);
       WorkbenchComponents.clearModelOptions(panel);panel.replaceChildren();status.textContent='选择模型';
@@ -4959,7 +4968,7 @@ async function modelPicker(force=false,openList=false){
         if(tier)c.speedChoice={model:model.id,id:tier};else delete c.speedChoice;
         c.effort=effort;c.pickerChoice={mode:'model',model:model.id};
         c.selectionDuringTurn=c.pending;c.selectedForNext=true;c.model=model.id;c.modelName=model.name;
-        rememberConfiguration();save();modelLabel(c);finishChoice(model)
+        rememberConfiguration();save();modelLabel(c,trigger);finishChoice(model)
       }
       if(openList){
         const active=activeConfiguration();
@@ -5045,7 +5054,7 @@ async function modelPicker(force=false,openList=false){
           const editing=panel.contains(document.activeElement)||status.contains(document.activeElement);
           if(!interacted||(manual&&!editing)){
             const query=status.querySelector('.model-command-search')?.value;
-            const listing=$('model-picker').dataset.view==='list';
+            const listing=trigger.dataset.view==='list';
             data=fresh;projectDefaults=defaults;stale=false;
             if(listing||openList){
               list();
@@ -5078,7 +5087,7 @@ async function modelPicker(force=false,openList=false){
   }catch(e){
     if(!dialog.open||!body.contains(panel))return;
     status.textContent='无法加载模型：'+e.message;
-    const retry=row('重试加载模型','server',()=>modelPicker(true,openList));
+    const retry=row('重试加载模型','server',()=>modelPicker(true,openList,c,trigger));
     retry.dataset.retryCatalog='';
     panel.append(retry);retry.focus({preventScroll:true})
   }

@@ -65,6 +65,8 @@ dialog.model-menu::backdrop{background:transparent}
 .side-chat > form:focus-within{border-color:var(--muted)}
 .side-attachments:not([hidden]){display:flex;flex-wrap:wrap;gap:4px}
 .side-chat-actions{display:flex;align-items:center;justify-content:space-between}
+.side-chat-actions .side-model-picker{min-width:0;margin-left:auto;margin-right:6px}
+.side-model-picker .model-trigger-content{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .side-chat-actions > button[type=submit]{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--send);color:var(--on-send)}
 .side-chat-actions svg{width:18px;height:18px}.side-chat-actions button:disabled{opacity:.45}
 .side-chat-stop{width:10px;height:10px;background:currentColor;border-radius:2px}
@@ -400,7 +402,7 @@ dialog.image-viewer{width:fit-content;max-width:calc(100vw - 24px);max-height:ca
 
 dialog.model-menu { max-height: calc(100vh - var(--picker-bottom) - 10px); }
 @supports (position-area: top span-left) {
-  #model-picker { anchor-name: --composer-model; }
+  :is(#model-picker,.side-model-picker)[aria-expanded=true] { anchor-name: --composer-model; }
   dialog.model-menu {
     position-anchor: --composer-model;
     position-area: top span-left;

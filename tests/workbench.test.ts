@@ -63,7 +63,8 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
         return route.fulfill({json:{thread:child}})
       }
       if(path===base+'/api/models')return route.fulfill({json:{
-        models:['alpha','bravo'].map(id=>({id,name:id,efforts:['low','high'],defaultEffort:'low'})),
+        canSetServiceTier:true,
+        models:['alpha','bravo','charlie'].map(id=>({id,name:id,efforts:['low','high'],defaultEffort:'low',serviceTiers:[{id:'priority',name:'Fast'}]})),
         defaults:{model:'alpha',effort:'low'}}});
       if(path===base+'/api/turn'){
         const request=route.request().postDataJSON();mode=request.collaborationMode;job=request.id;
@@ -95,6 +96,16 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.getByRole('menuitemradio',{name:'bravo',exact:true}).click();
     await page.keyboard.press('Escape');
     const side=page.locator('.side-chat');
+    const sideModels=side.getByRole('button',{name:'选择模型与推理强度'});
+    assert.match(await sideModels.innerText(),/alpha/);
+    await sideModels.tap();
+    await page.locator('.model-view-toggle').tap();
+    await page.getByRole('menuitemradio',{name:'charlie',exact:true}).tap();
+    await page.locator('.speed-trigger').tap();
+    await page.getByRole('menuitemradio',{name:'标准',exact:true}).tap();
+    await page.keyboard.press('Escape');
+    assert.match(await sideModels.innerText(),/charlie/);
+    assert.match(await page.locator('#model-picker').innerText(),/bravo/);
     const editor=side.locator('textarea');
     const initialHeight=await editor.evaluate(field=>field.clientHeight);
     await editor.fill(Array(8).fill('侧聊草稿').join('\n'));
@@ -112,7 +123,7 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     const selection=(await submitted).request().postDataJSON();
     assert.equal(selection.prompt,'讨论计划\n\n文件：side-note.txt\n侧聊附件正文');
     assert.equal(forks,1);
-    assert.equal(selection.model,'alpha');
+    assert.equal(selection.model,'charlie');
     assert.equal(selection.effort,'high');
     assert.equal(selection.serviceTier,'default');
     assert.equal(mode,'plan');
