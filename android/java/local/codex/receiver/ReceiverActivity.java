@@ -430,6 +430,8 @@ public final class ReceiverActivity extends Activity {
     }
     @Override protected void onResume(){
         super.onResume();foreground=true;web.onResume();preview.resume();handler.post(refresh);
+        // The service can stop while this activity survives in the background.
+        serviceRoute="";
         syncConnectionService();
         if(resumedBefore||needsRecovery)scheduleRecovery(350);
         resumedBefore=true;
