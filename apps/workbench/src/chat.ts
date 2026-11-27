@@ -1014,7 +1014,9 @@ function mountSideChat(container,owner,chat){
   };
   const actions=element('div','side-chat-actions');
   send.type='submit';
-  actions.append(btn('添加本地文件','plus',()=>picker.click()),send);
+  const attach=btn('添加文件等内容','plus',()=>attachmentMenu(attach,picker,chat,field));
+  attach.setAttribute('aria-haspopup','menu');attach.setAttribute('aria-expanded','false');
+  actions.append(attach,send);
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   let last='';
@@ -2243,7 +2245,7 @@ function closeDialog(reason){
 function positionComposerPopup(){
   const dialog=$('dialog');
   if(!menuAnchor||!dialog.open)return;
-  const attachment=menuAnchor===$('attach-menu');
+  const attachment=dialog.classList.contains('context-menu');
   if(!attachment&&!dialog.classList.contains('composer-menu'))return;
   const prefix=attachment?'--attach':'--composer';
   const rect=menuAnchor.getBoundingClientRect();
@@ -2452,17 +2454,17 @@ function archives(){
   }
   void load(null)
 }
-function attachmentMenu(){
-  const anchor=$('attach-menu'),body=modal('添加文件等内容',anchor),dialog=$('dialog');
+function attachmentMenu(anchor=$('attach-menu'),picker=$('file'),chat=current(),field=$('prompt')){
+  const body=modal('添加文件等内容',anchor),dialog=$('dialog');
   anchor.setAttribute('aria-expanded','true');dialog.classList.add('context-menu');
   positionComposerPopup();
   const menu=element('div');menu.setAttribute('role','menu');body.append(menu);
   function item(label,name,run){
     const button=row(label,name,run);button.setAttribute('role','menuitem');menu.append(button)
   }
-  item('添加本地文件','file-text',()=>{closeDialog();$('file').click()});
-  item('添加远程文件','folder-open',remoteFilePicker);
-  if(!current().activeTurn&&!current().pending&&(!nativePermissionMode||current().collaborationMode==='plan'))item(current().collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode);
+  item('添加本地文件','file-text',()=>{closeDialog();picker.click()});
+  item('添加远程文件','folder-open',()=>remoteFilePicker(chat,field));
+  if(chat===current()&&!chat.activeTurn&&!chat.pending&&(!nativePermissionMode||chat.collaborationMode==='plan'))item(chat.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode);
   menu.firstElementChild.focus();
   menu.onkeydown=e=>{
     if(!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;
@@ -2589,22 +2591,25 @@ async function searchProjectFiles(root,query,signal){
   const data=await res.json();if(!res.ok)throw Error(res.status===404?'请使用新版客户端搜索主机项目':data.error);
   return data.files
 }
-async function remoteFilePicker(){
-  const c=current(),body=modal('添加远程文件'),root=element('select','field'),form=element('form','file-search'),
+async function remoteFilePicker(c,composerField){
+  const body=modal('添加远程文件'),root=element('select','field'),form=element('form','file-search'),
     field=element('input','field'),search=element('button','','搜索'),status=element('p','quiet'),results=element('div','results');
   root.setAttribute('aria-label','主机项目目录');field.placeholder='按文件名搜索';field.setAttribute('aria-label','文件名');
   search.type='submit';form.append(field,search);body.append(root,form,status,results);status.setAttribute('role','status');
   let native=false;
   function attach(path,entry){
+    if(!visible())return;
     const remotePath=projectEntryPath(path,entry.path);
     if(!c.files.some(f=>f.remotePath===remotePath)){
       const files=c.files.concat({name:entry.path,remotePath,directory:entry.directory});
       if(new TextEncoder().encode(promptWithFiles(c.draft,files)).length>16000){toast('正文与附件合计最多 16 KB');return}
       c.files=files;save()
     }
-    closeDialog();composer();$('prompt').focus()
+    closeDialog();
+    if(c===current())composer();else visibleSideChat.sync();
+    composerField.focus()
   }
-  function visible(){return current()===c&&body.contains(form)&&$('dialog').open}
+  function visible(){return composerField.isConnected&&(current()===c||visibleSideChat?.chat===c)&&body.contains(form)&&$('dialog').open}
   let version=0;
   function reset(){version++;results.replaceChildren();status.textContent=''}
   root.onchange=field.oninput=reset;

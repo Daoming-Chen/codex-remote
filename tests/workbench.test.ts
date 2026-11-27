@@ -102,7 +102,8 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await side.locator('textarea').fill('讨论计划');
     assert.equal(await editor.evaluate(field=>field.clientHeight),initialHeight);
     const choosing=page.waitForEvent('filechooser');
-    await side.getByRole('button',{name:'添加本地文件'}).tap();
+    await side.getByRole('button',{name:'添加文件等内容'}).tap();
+    await page.getByRole('menuitem',{name:'添加本地文件'}).tap();
     await (await choosing).setFiles({name:'side-note.txt',mimeType:'text/plain',buffer:Buffer.from('侧聊附件正文')});
     await side.getByText('side-note.txt',{exact:true}).waitFor();
     assert.equal(await page.locator('#attachment').getByText('side-note.txt').count(),0);
@@ -746,7 +747,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       }
     });
     await page.setViewportSize({width:820,height:440});
-    const sideSend=page.locator('.side-chat > form button');
+    const sideSend=page.locator('.side-chat button[type=submit]');
     const sendBounds=await sideSend.boundingBox(),panelBounds=await page.locator('#workbench').boundingBox();
     assert(sendBounds&&panelBounds);
     const gap=panelBounds.y+panelBounds.height-sendBounds.y-sendBounds.height;
