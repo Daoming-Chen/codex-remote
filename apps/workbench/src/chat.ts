@@ -963,17 +963,21 @@ function attachedSideChats(owner){
   return owner.sideChats
 }
 function sideRecord(chat,index){
-  const fallback=index?sideChatTab.title+' '+(index+1):sideChatTab.title;
+  const number=chat.sideChatNumber??(index+1);
+  const fallback=number>1?sideChatTab.title+' '+number:sideChatTab.title;
   return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||fallback}
 }
 function createSideChat(owner){
   const list=attachedSideChats(owner);
-  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId});
+  const openTabs=owner.workView?.ids||[];
+  const sideChatNumber=1+list.filter((side,index)=>openTabs.includes(sideRecord(side,index).id)).length;
+  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId,sideChatNumber});
   list.push(chat);return sideRecord(chat,list.length-1)
 }
 document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.altKey&&!event.shiftKey&&event.code==='KeyS'&&!$('dialog').open){
-    event.preventDefault();const list=attachedSideChats(current());openRecord(list.length?sideRecord(list.at(-1),list.length-1):sideChatTab);document.querySelector('.side-chat textarea')?.focus()
+    if(!current().thread||current().archived)return;
+    event.preventDefault();if(!event.repeat)openRecord(sideChatTab)
   }
 });
 const openingSideThreads=new WeakSet();
@@ -1095,6 +1099,7 @@ function newWorkTabButton(){
   const button=btn('新建标签页','plus',()=>{
     const chat=current(),body=modal('新建标签页',button);
     for(const tool of panelTools.values()){
+      if(tool===sideChatTab&&(!chat.thread||chat.archived))continue;
       body.append(row(tool.title,workIcon(tool),()=>{closeDialog();openRecord(tool)}))
     }
     const records=[...chatWorkRecords(chat).values()].reverse();
@@ -1145,12 +1150,14 @@ function newWorkTabButton(){
   button.setAttribute('aria-haspopup','dialog');return button
 }
 function openRecord(item){
-  if(item===sideChatTab)item=createSideChat(current());
+  const creatingSideChat=item===sideChatTab;
+  if(creatingSideChat)item=createSideChat(current());
   const chat=current(),view=chat.workView??={ids:[],active:null};chat.summaryOpen=false;delete chat.workHidden;
   if(!workItems.has(chat))workItems.set(chat,new Map());
   workItems.get(chat).set(item.id,item);
   if(!view.ids.includes(item.id))view.ids.push(item.id);
-  view.active=item.id;save();renderWorkbench()
+  view.active=item.id;save();renderWorkbench();
+  if(creatingSideChat)document.querySelector('.side-chat textarea')?.focus()
 }
 function renderFileDiff(file,summary,change){
   if(!change.diff)return;
@@ -2600,7 +2607,7 @@ function positionSidebarMenu(anchor){
 function options(c,anchor=null){const body=modal('聊天选项',anchor);if(anchor?.closest('.history-row'))positionSidebarMenu(anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(anchor?.closest('.history-row'))body.querySelector('button')?.focus();if(c.archived||(!c.thread&&!c.messages?.length))return;
   if(c.thread&&anchor?.id==='header-options'){
     body.append(row('打开侧边聊天','message-circle',()=>{
-      closeDialog();openRecord(sideChatTab);document.querySelector('.side-chat textarea')?.focus()
+      closeDialog();openRecord(sideChatTab)
     }))
   }
   if(c.thread&&!c.pending&&!c.activeTurn&&!c.archived){const button=row('归档聊天','folder-open',()=>setArchived(c.thread,true,button));body.append(button)}

@@ -557,8 +557,11 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.getByRole('button',{name:'打开侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
     await sideDraft.fill('侧边草稿');
-    await page.getByRole('button',{name:'关闭 侧边聊天',exact:true}).tap();
     await page.keyboard.press('Control+Alt+s');
+    assert.equal(await sideDraft.inputValue(),'');
+    assert.equal(await page.locator('#work-tabs .work-tab').count(),2);
+    assert(await sideDraft.evaluate(field=>document.activeElement===field));
+    await page.getByRole('button',{name:'关闭 侧边聊天 2',exact:true}).tap();
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
     await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
