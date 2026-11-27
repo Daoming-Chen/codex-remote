@@ -57,7 +57,11 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.route(origin+'/**',async route=>{
       const path=new URL(route.request().url()).pathname;
       if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(await readFile(assets+'/index.html','utf8'),{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
-      if(path===base+'/api/thread-fork'){forks++;return route.fulfill({json:{thread:child}})}
+      if(path===base+'/api/thread-fork'){
+        forks++;
+        if(forks===3)return route.fulfill({status:503,json:{error:'主机暂时离线'}});
+        return route.fulfill({json:{thread:child}})
+      }
       if(path===base+'/api/models')return route.fulfill({json:{
         models:['alpha','bravo'].map(id=>({id,name:id,efforts:['low','high'],defaultEffort:'low'})),
         defaults:{model:'alpha',effort:'low'}}});
@@ -102,13 +106,24 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await side.getByText('已收到回答',{exact:true}).waitFor();
     assert.deepEqual(answer,{turn:'side-turn',token:'pick',answers:{format:{answers:['表格']}}});
     const commandTurn=page.waitForRequest(req=>req.url()===origin+base+'/api/turn');
+    const file={name:'note.txt',mimeType:'text/plain',buffer:Buffer.from('附件正文')};
+    await page.locator('#file').setInputFiles(file);
+    await page.locator('#attachment').getByText(file.name).waitFor();
     await page.locator('#prompt').fill('/side 单独追问');
     await page.locator('#prompt').press('Enter');
     const commandRequest=(await commandTurn).postDataJSON();
     assert.equal(commandRequest.expectedThread,child);
-    assert.equal(commandRequest.prompt,'单独追问');
+    assert.equal(commandRequest.prompt,'单独追问\n\n文件：note.txt\n附件正文');
     assert.equal(forks,2);
     assert.equal(await page.locator('#prompt').inputValue(),'');
+    await page.locator('#file').setInputFiles(file);
+    await page.locator('#attachment').getByText(file.name).waitFor();
+    await page.locator('#prompt').fill('/side 仍待发送');
+    await page.locator('#prompt').press('Enter');
+    await side.getByText('主机暂时离线').waitFor();
+    assert.equal(await side.locator('textarea').inputValue(),'仍待发送');
+    await side.getByRole('button',{name:'移除 note.txt'}).tap();
+    assert.equal(await side.locator('.chip').count(),0);
   }finally{await browser.close()}
 });
 
