@@ -791,11 +791,11 @@ async function watchTurn(job,launch=null,freshSubmission=false){
       if(event.type==='command.output'){
         record('activity',event.item_id);
         const items=progress.items??=[];
-        let record=items.find(item=>item.id===event.item_id);
-        if(!record){record={id:event.item_id,type:'commandExecution',status:'inProgress'};items.push(record)}
-        const output=(record.output||'')+event.delta;
-        record.output=output.slice(-16384);
-        record.truncated=record.truncated||event.truncated||output.length>16384
+        let item=items.find(entry=>entry.id===event.item_id);
+        if(!item){item={id:event.item_id,type:'commandExecution',status:'inProgress'};items.push(item)}
+        const output=(item.output||'')+event.delta;
+        item.output=output.slice(-16384);
+        item.truncated=item.truncated||event.truncated||output.length>16384
       }
       if(event.item?.type==='agent_message'){
         const entry=record('assistant',event.item.id);
