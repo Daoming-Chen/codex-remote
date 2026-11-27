@@ -13,7 +13,7 @@ if mode in ("shared-read","archive-set","list","read-state-update") or (mode == 
         shared = runpy.run_path(sys.argv[3])["Connection"]()
     except (OSError, EOFError, RuntimeError):
         if mode not in ("read", "list"): raise
-if shared is None and mode not in ("scheduled-local", "project-file-snapshot"):
+if shared is None and mode not in ("scheduled-local", "project-file-snapshot", "project-working-file", "project-directories"):
     proc = subprocess.Popen(["codex", "app-server", "--stdio"], stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 
@@ -134,6 +134,40 @@ def local_schedules():
         connection.close()
     return result
 
+def project_working_entry(query, directory):
+    import stat
+    root, path = query["root"], query["path"]
+    relative = os.path.relpath(path, root)
+    parts = [] if relative == "." else relative.split(os.sep)
+    if not os.path.isabs(root) or any(part in ("", "..", ".git") for part in parts):
+        raise ValueError("请选择项目内的文件或目录")
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(root, os.O_DIRECTORY | os.O_RDONLY)
+    try:
+        for index, part in enumerate(parts):
+            flags = dir_flags if directory or index < len(parts)-1 else os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        if directory:
+            folders, files = [], []
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    if entry.name == ".git" or any(ord(c)<32 for c in entry.name): continue
+                    if entry.is_dir(follow_symlinks=False): folders.append(entry.name)
+                    elif entry.is_file(follow_symlinks=False): files.append(entry.name)
+                    if len(folders) + len(files) > 500: break
+            return {"folders": sorted(folders)[:500], "files": sorted(files)[:max(0,500-len(folders))],
+                    "truncated":len(folders)+len(files)>500}
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("仅支持预览普通文本文件")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            raw = source.read(512*1024+1)
+        if len(raw)>512*1024 or b"\0" in raw: raise ValueError("仅支持预览较短的文本文件")
+        return {"text":raw.decode("utf-8-sig"),"source":"working-tree"}
+    finally:
+        os.close(fd)
+
 def project_file_snapshot(query):
     root, path = query["root"], query["path"]
     relative = os.path.relpath(path, root).replace(os.sep, "/")
@@ -165,6 +199,8 @@ try:
         result = local_schedules()
     elif mode == "project-file-snapshot":
         result = project_file_snapshot(json.loads(target))
+    elif mode in ("project-working-file", "project-directories"):
+        result = project_working_entry(json.loads(target), mode == "project-directories")
     elif mode == "plugin-detail":
         query = json.loads(target)
         markets = rpc(2, "plugin/list", {})["marketplaces"]

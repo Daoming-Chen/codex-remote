@@ -1,0 +1,18 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -94735,6 +94735,7 @@
+   "turn/start": external_exports.object({
+     threadId: id3,
+     input: input3,
++    serviceTierForTurn: external_exports.enum(["default", "priority", "ultrafast"]).optional(),
+     model: external_exports.string().min(1).max(128).optional(),
+     effort: external_exports.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
+     summary: external_exports.enum(["auto", "concise", "detailed", "none"]).optional(),
+@@ -96001,6 +96002,7 @@
+           await this.publishPermission(threadId, codexTurnPermissionParams(permission, allowedThread?.cwd));
+         }
+       }
++      if (call.method === "model/list") return { ...result, remoteServiceTierForTurn: true };
+       return result;
+     } catch (error62) {
+       finishStart?.(errorCode2(error62) === "CODEX_REQUEST_TIMEOUT");

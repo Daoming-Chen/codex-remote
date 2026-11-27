@@ -100,9 +100,10 @@ try{await access(join(directory,'server-credentials.json'))}catch(e){
   throw e
 }
 }
-export async function listReceiverDevices(){
+export async function listReceiverDevices(cancel){
   await requireReceiverIdentity();
-  const signal=AbortSignal.timeout(20000);
+  const timeout=AbortSignal.timeout(20000);
+  const signal=cancel?AbortSignal.any([cancel,timeout]):timeout;
   const {runtime}=createClient(false,DirectoryServerApi);
   try{
     await runtime.start();
@@ -126,6 +127,18 @@ async function reconcileTerminalLeases(fs,leases,sid,call){
      await fs.unlink(lease)
    }catch{/* Reconcile on a later authenticated connection. */}
  }
+}
+// Each preview belongs to the SDK runtime for this device. Its listeners are
+// closed by the SDK on disconnect, and the Host checks its port list on use.
+export function webPreviewAccess(runtime,client){
+  return {
+    listPreviewPorts:()=>client.rpc('loopback.call',{op:'describe'},AbortSignal.timeout(15000)),
+    async openPreviewPort(port){
+      const result=await runtime.handleControl('preview.open',{port},AbortSignal.timeout(15000));
+      if(!result.ok)throw Object.assign(Error('主机网页预览不可用'),{code:result.error?.details?.remoteCode});
+      return result.value
+    }
+  }
 }
 async function connect(relay){
 await requireReceiverIdentity();
@@ -157,7 +170,9 @@ try {
 
  const codex=remote.features.codex===true?new CodexRemoteClient(remote.client):null;
  const context={runtime,deviceId:target.deviceId,deviceName:target.name,
+   probe:(timeout=6000)=>remote.client.rpc('harness.transport.describe',{},AbortSignal.timeout(timeout)),
    nativeStream:codex,
+   ...webPreviewAccess(runtime,remote.client),
    nativeCall:codex?(method,params)=>codex.request(method,params,AbortSignal.timeout(30000)):null,
    lastDisconnect:()=>lastDisconnect,closeDetail:()=>closeDetail,connected:()=>!closeDetail&&remote.client.getStats().connected,transportMode:()=>remote.transport.getStats().mode,nativeCodex:remote.features.codex===true};
  if(codex){
@@ -226,11 +241,13 @@ export async function* remoteLines(code,events=false,relay=false,onComplete,canc
     await call('terminal/create',{agentId:sid,request:{id,cols:150,rows:24}});
     await g.open('terminal/retain',{args:{sessionId:sid,id}},stop.signal);
     const follow=await g.open('terminal/follow',{args:{agentId:sid,id,attachmentId}},AbortSignal.any([stop.signal,signal]));
-    let sent=false,reading=false,buf='',sentAt;
+    let sent=false,reading=false,buf='',sentAt,writeConfirmedAt;
     for await(const f of follow){
       if(!sent&&f.info?.controllerId===attachmentId&&f.info?.state==='running'&&(f.type==='snapshot'||f.type==='state')){
         const stamp=onStart?' "$(date +%s%3N)"':'';
-        sent=true;sentAt=Date.now();await call('terminal/write',{agentId:sid,id,attachmentId,data:'echo '+marker+'_START'+stamp+'; '+code+'; echo '+marker+'_DONE\r'})
+        sent=true;sentAt=Date.now();
+        await call('terminal/write',{agentId:sid,id,attachmentId,data:'echo '+marker+'_START'+stamp+'; '+code+'; echo '+marker+'_DONE\r'});
+        writeConfirmedAt=Date.now()
       }
       if(f.type!=='output')continue;
       buf+=f.data;
@@ -239,7 +256,7 @@ export async function* remoteLines(code,events=false,relay=false,onComplete,canc
         if(!reading&&(line===marker+'_START'||onStart&&line.startsWith(marker+'_START '))){
           reading=true;
           const stamp=line.slice(marker.length+7);
-          onStart?.(ctx.transportMode(),/^\d{13}$/.test(stamp)?{sentAt,hostAt:Number(stamp),receivedAt:Date.now()}:null,ctx.transportMode);
+          onStart?.(ctx.transportMode(),/^\d{13}$/.test(stamp)?{sentAt,writeConfirmedAt,hostAt:Number(stamp),receivedAt:Date.now()}:null,ctx.transportMode);
           continue
         }
         if(!reading)continue;
@@ -261,6 +278,31 @@ export async function* remoteLines(code,events=false,relay=false,onComplete,canc
     }catch{/* The next authenticated connection can reclaim the lease. */}
     activeTerminals.delete(id)
   }
+}
+let foregroundCheck;
+export function recoverRemote(){
+  if(foregroundCheck)return foregroundCheck;
+  foregroundCheck=(async()=>{
+    const cached=connection;
+    if(!cached){await openRemote();return false}
+    const ctx=await cached;
+    for(const timeout of [6000,12000]){
+      if(!ctx.connected())break;
+      try{await ctx.probe(timeout);return true}catch(error){
+        // A reply from an older peer still confirms that the channel is alive.
+        if(error.code==='METHOD_NOT_FOUND'||error.code==='METHOD_NOT_ALLOWED')return true
+        // A foreground transition can delay a probe while the peer is still connected.
+        if(error.code!=='RPC_ABORTED'&&error.name!=='TimeoutError')break
+      }
+    }
+    if(connection===cached){
+      connection=null;
+      await ctx.runtime.close().catch(()=>{})
+    }
+    await openRemote()
+    return false
+  })().finally(()=>{foregroundCheck=null});
+  return foregroundCheck
 }
 export async function closeRemote(){
   const current=connection;connection=null;

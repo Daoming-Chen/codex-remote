@@ -15,11 +15,11 @@ async function deviceFetch(path,options){
 let receiverName=document.querySelector('meta[name="receiver-name"]')?.content||'远程主机';
 function renderReceiverName(){
   for(const label of document.querySelectorAll('[data-receiver-name]'))label.textContent=receiverName;
-  const device=$('composer-device');
+  const device=document.querySelector('.rail-profile');
+  const parts=receiverName.match(/[\p{L}\p{N}]+/gu)||[];
+  device.textContent=(parts.length>1?parts.slice(0,2).map(p=>Array.from(p)[0]).join(''):Array.from(parts[0]||receiverName).slice(0,2).join('')).toLocaleUpperCase();
   device.setAttribute('aria-label','切换设备，当前为 '+receiverName);
   device.title='切换设备 · '+receiverName;
-  const avatar=document.querySelector('.account .avatar');
-  if(avatar)avatar.textContent=Array.from(receiverName)[0]?.toLocaleUpperCase()||''
 }
 renderReceiverName();
 let permissionCapability,permissionCheckedAt=0,nativePermissionMode;
@@ -323,6 +323,7 @@ function renderSidebarHistory(){
   const groupKey=c=>hostProject(c.cwd,c.projectId)?.id||c.cwd||'';
   for(const c of db.chats){
     if(c.thread)seen.add(c.thread);
+    for(const side of c.sideChats||(c.sideChat?[c.sideChat]:[]))if(side.thread)seen.add(side.thread);
     if(c.archived||pinIds.has(c.thread))continue;
     if(c.messages.length||c.thread)add(groupKey(c),{local:c,title:c.title,updated:c.updated});
     else if(c!==current()&&(c.draft?.trim()||c.files?.length)){
@@ -953,9 +954,148 @@ function chatWorkRecords(chat){
   const items=[...rows.flatMap(row=>row.items||[]),...(chat.items||[])];
   return new Map(items.filter(item=>item.id).map(item=>[item.id,item]))
 }
+const projectFilesTab={id:'receiver:project-files',type:'projectFiles',title:'文件资源管理器'};
+const browserTab={id:'receiver:browser',type:'browser',title:'浏览器'};
+const sideChatTab={id:'receiver:side-chat',type:'sideChat',title:'侧边聊天'};
+function attachedSideChats(owner){
+  if(!owner.sideChats)owner.sideChats=owner.sideChat?[owner.sideChat]:[];
+  delete owner.sideChat;
+  return owner.sideChats
+}
+function sideRecord(chat,index){
+  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||sideChatTab.title}
+}
+function createSideChat(owner){
+  const list=attachedSideChats(owner);
+  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId});
+  list.push(chat);return sideRecord(chat,list.length-1)
+}
+document.addEventListener('keydown',event=>{
+  if((event.ctrlKey||event.metaKey)&&event.altKey&&!event.shiftKey&&event.code==='KeyS'&&!$('dialog').open){
+    event.preventDefault();const list=attachedSideChats(current());openRecord(list.length?sideRecord(list.at(-1),list.length-1):sideChatTab);document.querySelector('.side-chat textarea')?.focus()
+  }
+});
+const openingSideThreads=new WeakSet();
+let visibleSideChat;
+function mountSideChat(container,owner,chat){
+  const transcript=element('div','side-chat-history'),status=element('p','quiet');
+  const form=document.createElement('form'),field=document.createElement('textarea'),send=element('button','','发送');
+  const empty=element('div','side-chat-empty');empty.append(icon('message-circle'),element('strong','','侧边聊天'),element('span','','在这里追问，不会打断主聊天。'));
+  field.placeholder='在侧边聊天中提问';field.setAttribute('aria-label',field.placeholder);
+  field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;save();sync()};
+  field.onkeydown=event=>{
+    if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
+      event.preventDefault();if(!event.repeat&&!chat.pending)form.requestSubmit()
+    }
+  };
+  transcript.setAttribute('aria-label','侧边聊天记录');status.setAttribute('role','status');
+  form.append(field,send);container.classList.add('side-chat');container.append(empty,transcript,status,form);
+  let last='';
+  function sync(){
+    if(!container.isConnected)return;
+    const rows=chat.messages.filter(m=>m.text).map(m=>[m.role,m.text]);
+    if(chat.pending&&chat.preview)rows.push(['assistant',chat.preview]);
+    empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
+    const content=JSON.stringify(rows);
+    if(content!==last){
+      const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
+      last=content;transcript.replaceChildren();
+      for(const [role,text] of rows){
+        const message=element('div',role==='user'?'side-question':'markdown');
+        if(role==='user')message.textContent=text;else message.innerHTML=window.renderMarkdown(text);
+        transcript.append(message)
+      }
+      if(atEnd)transcript.scrollTop=transcript.scrollHeight
+    }
+    if(field.value!==chat.draft)field.value=chat.draft;
+    status.textContent=chat.error||(openingSideThreads.has(chat)?'正在关联主聊天…':chat.pending?chat.phase:'');
+    send.setAttribute('aria-label',chat.pending?'停止':'发送');send.title=send.getAttribute('aria-label');
+    send.replaceChildren(chat.pending?element('span','side-chat-stop'):icon('arrow-up'));
+    send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:!field.value.trim()||openingSideThreads.has(chat)
+  }
+  visibleSideChat={chat,sync};sync();
+  form.onsubmit=async event=>{
+    event.preventDefault();if(send.disabled)return;
+    if(chat.pending){
+      chat.stopping=chat.turn;sync();
+      try{
+        const res=await deviceFetch('/api/interrupt/'+chat.pending,{method:'POST'});
+        if(!res.ok)throw Error((await res.json()).error||'停止失败')
+      }catch(error){chat.stopping=false;toast(error.message);sync()}
+      return
+    }
+    const draft=field.value.trim();
+    if(new TextEncoder().encode(draft).length>16000){toast('单条消息最多 16 KB');return}
+    openingSideThreads.add(chat);chat.error=null;sync();
+    try{
+      if(owner.thread&&!chat.thread){
+        chat.forkRequest??=crypto.randomUUID();save();
+        const res=await deviceFetch('/api/thread-fork',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({thread:owner.thread,request:chat.forkRequest,sideChat:true})});
+        const result=await res.json();if(!res.ok||!result.thread||result.thread===owner.thread)throw Error(result.error||'无法创建侧边聊天');
+        chat.thread=result.thread;save()
+      }
+      const id=crypto.randomUUID();chat.pending=id;chat.preview='';chat.phase='正在发送…';
+      chat.outbox={id,draft,files:[],options:{expectedThread:chat.thread||null,parent:chat.parent,cwd:chat.cwd||null,projectId:chat.projectId||null,
+        approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(owner)}};
+      chat.messages.push({role:'user',text:draft,submissionId:id});
+      if(chat.draft.trim()===draft){chat.draft='';field.value=''}
+      save();void poll(chat,true)
+    }catch(error){chat.error=error.message;save()}
+    finally{openingSideThreads.delete(chat);sync()}
+  };
+  if(chat.pending)void poll(chat)
+}
+const hostBrowserAddress=WorkbenchComponents.hostBrowserAddress;
+function mountHostBrowser(container,chat){
+  container.classList.add('host-browser');
+  WorkbenchComponents.mountHostBrowser(container,{
+    address:chat.browserAddress||'',fetch:deviceFetch,
+    remember(address){chat.browserAddress=address;save()}
+  })
+}
+const panelTools=new Map([projectFilesTab,browserTab,sideChatTab].map(tool=>[tool.id,tool]));
+function workIcon(record){
+  if(record.type==='sideChat')return 'square-pen';
+  return record.type==='projectFiles'?'folder-open':record.type==='browser'?'monitor':record.type==='commandExecution'?'terminal':'file-text'
+}
+function mountEmptyPanel(panel,chat){
+  const cache=new Map();
+  return WorkbenchComponents.mountNewTabSearch(panel,{
+    tools:Array.from(panelTools.values(),tool=>({title:tool.title,open:()=>openRecord(tool)})),
+    address:hostBrowserAddress,
+    openFile(path){chat.projectFile={cwd:chat.cwd,path};openRecord(projectFilesTab)},
+    openAddress(url){chat.browserAddress=url;openRecord(browserTab)},
+    async *files(query,signal){
+      if(!chat.cwd)throw Error('请先为当前聊天选择项目');
+      const projects=db.hostProjects?.length?db.hostProjects:(await directoryPage(null)).projects||[];
+      const root=projectRootFor(chat.cwd,projects.flatMap(project=>project.roots));
+      if(!root)throw Error('当前聊天目录不在主机的项目列表中');
+      const trim=path=>(isWindowsRoot(root)?path.replaceAll('\\','/'):path).replace(/\/+$/,'');
+      const base=trim(chat.cwd).slice(trim(root).length).replace(/^\/+/, '');
+      const prefix=base?base+'/':'';
+      const native=await nativePermissions();if(signal.aborted)return;
+      if(!native){
+        const entries=await searchProjectFiles(root,query,signal);
+        yield {files:entries.filter(entry=>!entry.directory&&entry.path.startsWith(prefix)).map(entry=>entry.path.slice(prefix.length))};
+        return
+      }
+      yield* WorkbenchComponents.searchDirectoryFiles(query,signal,async dir=>{
+        if(cache.has(dir))return cache.get(dir);
+        const listing=await projectDirectory(root,dir?prefix+dir:base,chat.thread,chat.cwd,signal);
+        if(signal.aborted)return listing;
+        if(cache.size>=128)cache.delete(cache.keys().next().value);
+        cache.set(dir,listing);return listing
+      })
+    }
+  })
+}
 function newWorkTabButton(){
   const button=btn('新建标签页','plus',()=>{
     const chat=current(),body=modal('新建标签页',button);
+    for(const tool of panelTools.values()){
+      body.append(row(tool.title,workIcon(tool),()=>{closeDialog();openRecord(tool)}))
+    }
     const records=[...chatWorkRecords(chat).values()].reverse();
     const titles=new Map();
     for(const item of records){
@@ -1004,6 +1144,7 @@ function newWorkTabButton(){
   button.setAttribute('aria-haspopup','dialog');return button
 }
 function openRecord(item){
+  if(item===sideChatTab)item=createSideChat(current());
   const chat=current(),view=chat.workView??={ids:[],active:null};chat.summaryOpen=false;delete chat.workHidden;
   if(!workItems.has(chat))workItems.set(chat,new Map());
   workItems.get(chat).set(item.id,item);
@@ -1062,7 +1203,8 @@ function renderThreadSummary(chat){
   for(const item of [...rows.flatMap(row=>row.items||[]),...(chat.items||[])]){
     for(const change of item.changes||[])files.set(change.path,item)
   }
-  const snapshot=JSON.stringify([chat.id,chat.goal,plan,[...files].map(([path,item])=>[path,item.id,item.status])]);
+  const sideRecords=attachedSideChats(chat).map(sideRecord);
+  const snapshot=JSON.stringify([chat.id,chat.goal,plan,sideRecords,[...files].map(([path,item])=>[path,item.id,item.status])]);
   if(summarySnapshot===snapshot)return;
   summarySnapshot=snapshot;
   $('work-tabs').replaceChildren(element('strong','summary-title','摘要'),newWorkTabButton());
@@ -1071,6 +1213,10 @@ function renderThreadSummary(chat){
     detail.append(element('h3','summary-heading','目标'),element('p','',chat.goal.objective),element('small','quiet',goalLabel(chat.goal.status)))
   }
   if(plan)detail.append(planCard(plan));
+  if(sideRecords.length){
+    detail.append(element('h3','summary-heading','侧边聊天'));
+    for(const record of sideRecords)detail.append(row(record.title,'message-circle',()=>openRecord(record)))
+  }
   if(files.size){
     detail.append(element('h3','summary-heading','文件变更'));
     for(const [path,item] of files){
@@ -1091,36 +1237,48 @@ function endedActivityTurns(chat){
   }
   return turns
 }
+let stopPanelSearch;
 function renderWorkbench(){
   const pane=$('workbench'),chat=current(),view=chat.workView;
   const detail=$('work-detail');
   if(workChat!==chat.id){rememberWorkScroll(detail);previousDetail=null;previousTabs='';workChat=chat.id}
   const summary=!!chat.summaryOpen&&chat.messages.length>0;
   const home=!chat.messages.length&&!chat.thread;
-  const emptyPanel=home&&!!chat.emptyPanelOpen&&!view?.ids.length;
+  const emptyPanel=!!chat.emptyPanelOpen&&!summary&&!view?.ids.length;
   const hidden=!!(chat.workHidden&&(summary||view?.ids.length));
+  detail.classList.toggle('showing-browser',!summary&&!hidden&&view?.active===browserTab.id);
   $('header-options').hidden=home;
-  WorkbenchComponents.renderHomePanelToggle($('home-panel-toggle'),home,emptyPanel,toggleWorkPanel);
-  $('empty-work-panel').hidden=!emptyPanel;
+  WorkbenchComponents.renderPanelToggle($('home-panel-toggle'),home,emptyPanel||!hidden&&!summary&&!!view?.ids.length,toggleWorkPanel);
+  const empty=$('empty-work-panel'),searchKey=JSON.stringify([chat.id,chat.cwd,chat.thread]);
+  if(stopPanelSearch&&(!emptyPanel||empty.dataset.key!==searchKey)){
+    stopPanelSearch();stopPanelSearch=null;empty.replaceChildren()
+  }
+  empty.hidden=!emptyPanel;
   if(emptyPanel){
     pane.hidden=false;
     $('work-detail').replaceChildren();
-    $('work-tabs').replaceChildren();
+    if(!stopPanelSearch){
+      empty.dataset.key=searchKey;stopPanelSearch=mountEmptyPanel(empty,chat);
+      $('work-tabs').replaceChildren(element('strong','summary-title','新标签页'),newWorkTabButton());
+      if(!matchMedia('(pointer:coarse)').matches)empty.querySelector('input').focus({preventScroll:true})
+    }
     $('work-tab-list').hidden=true;
-    $('work-show').hidden=true;
+    $('header-summary').setAttribute('aria-pressed','false');
     previousDetail=null;previousTabs='';
     return
   }
-  $('work-show').hidden=!hidden;
   $('work-tab-list').hidden=summary;
   $('header-summary').setAttribute('aria-pressed',String(summary&&!hidden));
-  if(hidden){pane.hidden=true;return}
+  if(hidden){pane.hidden=true;if(detail.querySelector('.host-browser'))detail.replaceChildren();return}
   if(summary){rememberWorkScroll(detail);pane.hidden=false;previousTabs='';previousDetail=null;renderThreadSummary(chat);return}
   summarySnapshot=null;
   pane.hidden=!view?.ids.length;
-  if(pane.hidden){previousDetail=null;previousTabs='';return}
+  if(pane.hidden){if(detail.querySelector('.panel-tool'))detail.replaceChildren();previousDetail=null;previousTabs='';return}
   const latest=chatWorkRecords(chat);
-  const openRecords=view.ids.map(id=>latest.get(id)||workItems.get(chat)?.get(id)).filter(Boolean);
+  const sideChats=attachedSideChats(chat);
+  if(view.ids.includes(sideChatTab.id)&&!sideChats.length)createSideChat(chat);
+  const sideRecords=new Map(sideChats.map((side,index)=>[sideRecord(side,index).id,sideRecord(side,index)]));
+  const openRecords=view.ids.map(id=>sideRecords.get(id)||panelTools.get(id)||latest.get(id)||workItems.get(chat)?.get(id)).filter(Boolean);
   if(!openRecords.length){pane.hidden=true;previousDetail=null;previousTabs='';return}
   const activeRecord=openRecords.some(r=>r.id===view.active)?view.active:openRecords.at(-1).id;
   const tabs=$('work-tabs');
@@ -1130,7 +1288,7 @@ function renderWorkbench(){
   for(const [index,record] of openRecords.entries()){
     const tab=element('button','work-tab');
     tab.dataset.record=record.id;
-    tab.append(icon(record.type==='commandExecution'?'terminal':'file-text'),element('span','',recordTitle(record)));
+    tab.append(icon(workIcon(record)),element('span','',recordTitle(record)));
     tab.title=recordTitle(record);tab.setAttribute('aria-pressed',String(record.id===activeRecord));
     function activate(id){
       view.active=id;save();renderWorkbench();
@@ -1176,8 +1334,21 @@ function renderWorkbench(){
     const wrap=element('div','work-tab-wrap');wrap.append(tab,close);tabs.append(wrap)
   }
   tabs.append(newWorkTabButton());
+  tabs.querySelector('.work-tab[aria-pressed="true"]')?.parentElement.scrollIntoView({block:'nearest',inline:'nearest'});
   }
   const record=openRecords.find(x=>x.id===activeRecord);
+  if(panelTools.has(record.id)||record.type==='sideChat'){
+    const identity=JSON.stringify([chat.id,chat.projectId,chat.cwd,record.id]);
+    if(detail.firstElementChild?.dataset.toolIdentity!==identity){
+      rememberWorkScroll(detail);previousDetail=null;
+      const container=element('section','panel-tool');container.dataset.toolIdentity=identity;
+      detail.replaceChildren(container);
+      if(record===projectFilesTab)mountProjectFiles(container,chat);
+      else if(record.type==='sideChat')mountSideChat(container,chat,sideChats.find((side,index)=>sideRecord(side,index).id===record.id));
+      else mountHostBrowser(container,chat)
+    }
+    return
+  }
   const owner=chat.messages.findLast(m=>m.items?.some(item=>item.id===record.id));
   const ending=owner&&endedActivityTurns(chat).get(owner.turn);
   if(previousDetail&&previousDetail.ending===ending&&['id','title','type','status','output','exitCode','truncated','source','durationMs'].every(key=>record[key]===previousDetail[key])
@@ -1231,19 +1402,15 @@ $('work-tab-list').onclick=()=>{
 };
 function toggleWorkPanel(){
   const chat=current();
-  if(!chat.messages.length&&!chat.thread&&!chat.workView?.ids.length){
-    chat.emptyPanelOpen=!chat.emptyPanelOpen;save();renderWorkbench();return
-  }
-  if(!$('workbench').hidden)$('work-hide').click();
-  else if(!$('work-show').hidden)$('work-show').click();
-  else if(chat.messages.length)$('header-summary').click()
+  const showingTabs=!$('workbench').hidden&&!chat.summaryOpen;
+  chat.summaryOpen=false;
+  chat.workHidden=showingTabs;
+  chat.emptyPanelOpen=!showingTabs&&!chat.workView?.ids.length;
+  save();renderWorkbench()
 }
 $('work-hide').onclick=()=>{
   if(!$('empty-work-panel').hidden){toggleWorkPanel();$('home-panel-toggle').firstElementChild?.focus();return}
-  rememberWorkScroll($('work-detail'));current().workHidden=true;save();renderWorkbench();$('work-show').focus()
-};
-$('work-show').onclick=()=>{
-  delete current().workHidden;save();renderWorkbench();$('work-hide').focus()
+  rememberWorkScroll($('work-detail'));current().workHidden=true;save();renderWorkbench();$('home-panel-toggle').firstElementChild?.focus()
 };
 $('work-close').onclick=()=>{
   const chat=current();
@@ -1251,7 +1418,7 @@ $('work-close').onclick=()=>{
   if(chat.summaryOpen)chat.summaryOpen=false;
   else{
     for(const id of chat.workView?.ids||[])pageStorage.removeItem(workScrollKey(chat.id,id));
-    delete chat.workView;workItems.delete(chat)
+    delete chat.workView;delete chat.emptyPanelOpen;workItems.delete(chat)
   }
   save();renderWorkbench()
 };
@@ -1261,7 +1428,7 @@ function workWidth(width){
   preferredWorkWidth=width;
   const layout=$('layout'),pane=$('workbench');
   const rail=$('app-rail').getBoundingClientRect().width;
-  const sidebar=db.collapsed?60:parseFloat(document.documentElement.style.getPropertyValue('--rail'))||252;
+  const sidebar=db.collapsed?(document.body.classList.contains('android-receiver')?0:60):parseFloat(document.documentElement.style.getPropertyValue('--rail'))||252;
   const requested=Math.max(250,width||380);
   const splitVisible=!pane.hidden&&!layout.classList.contains('plugins-open');
   const compact=!mobile.matches&&splitVisible&&!db.collapsed&&innerWidth-rail-sidebar<360+Math.min(requested,380);
@@ -1392,6 +1559,11 @@ function chatFileTarget(href){
 $('messages').addEventListener('click',event=>{
   const link=event.target.closest('.answer a,.live-answer a');
   const href=link?.getAttribute('href');
+  if(hostBrowserAddress(href)){
+    event.preventDefault();const chat=current();chat.browserAddress=href;
+    $('work-detail').querySelector('.host-browser')?.remove();
+    openRecord(browserTab);return
+  }
   const target=chatFileTarget(href);
   if(!target)return;
   event.preventDefault();
@@ -1406,6 +1578,12 @@ $('messages').addEventListener('click',event=>{
   for(const item of items.reverse()){
     const match=item.changes?.find(change=>[change.path,change.kind?.move_path].some(name=>name&&pathKey(resolveChatFile(name,chat.cwd))===pathKey(path)));
     if(match){openChangedFile(item,match.path,line);return}
+  }
+  const cwdPrefix=chat.cwd&&resolveChatFile(chat.cwd,chat.cwd).replace(/\/+$/,'')+'/';
+  if(cwdPrefix&&pathKey(path).startsWith(pathKey(cwdPrefix))&&path.length>cwdPrefix.length){
+    chat.projectFile={cwd:chat.cwd,path:path.slice(cwdPrefix.length),line:Number(line)||null};
+    $('work-detail').querySelector('.project-explorer')?.parentElement.remove();
+    openRecord(projectFilesTab);return
   }
   const body=modal('主机文件');
   body.append(element('p','',path));
@@ -1960,7 +2138,8 @@ function chooseProject(path,projectId){
 let menuAnchor=null;
 function closeDialog(reason){
   const dialog=$('dialog');
-  for(const animation of dialog.getAnimations())if(animation.id==='model-view-size')animation.cancel();
+  WorkbenchComponents.dismissSpeedMenu(dialog.querySelector('.speed-flyout'));
+  for(const animation of dialog.getAnimations?.()||[])if(animation.id==='model-view-size')animation.cancel();
   menuAnchor?.setAttribute('aria-expanded','false');
   menuAnchor=null;
   $('model-picker').setAttribute('aria-expanded','false');
@@ -2091,7 +2270,7 @@ function updateEnterHint(){
 function settings(restore=false){
   const body=openSidePage('settings','设置',restore===true);
   if(!body)return;
-  body.append(row('键盘快捷键','sliders-horizontal',()=>keyboardShortcuts()));
+  body.append(row('连接信息','server',connectionView),row('键盘快捷键','sliders-horizontal',()=>keyboardShortcuts()));
   if(mobile.matches)body.append(row('定时任务','scheduled',()=>scheduledView()),row('账号用量','usage-ring',accountUsage),row('插件','plugins',()=>pluginsView()));
   const label=element('label','preference-label','发送快捷键'),select=element('select','field');
   select.id='composer-enter-behavior';label.htmlFor=select.id;
@@ -2214,13 +2393,105 @@ function projectRootFor(cwd,roots){
 function projectEntryPath(root,relative){
   return isWindowsRoot(root)?root.replace(/[\\/]+$/,'')+'\\'+relative.replaceAll('/','\\'):root.replace(/\/+$/,'')+'/'+relative
 }
-async function projectDirectory(root,relative,thread){
-  const response=await deviceFetch('/api/project-directories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,relative,thread})});
+async function projectDirectory(root,relative,thread,workspace=root,signal){
+  const response=await deviceFetch('/api/project-directories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,relative,thread,workspace}),signal});
   const data=await response.json();if(!response.ok)throw Error(data.error||'未能读取目录');
   return data
 }
-async function searchProjectFiles(root,query){
-  const res=await deviceFetch('/api/project-files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,query})});
+function mountProjectFiles(detail,chat){
+  const panel=element('section','project-explorer'),toolbar=element('div','project-explorer-toolbar');
+  const title=element('strong'),refresh=btn('刷新文件','refresh',()=>load());
+  const content=element('div','project-explorer-content');
+  toolbar.append(title,refresh);panel.append(toolbar,content);detail.replaceChildren(panel);
+  let generation=0;
+  const cwd=chat.cwd;
+  const active=()=>panel.isConnected&&current()===chat&&chat.cwd===cwd;
+  function notice(parent,message,retry){
+    const status=element('p','quiet',message);status.setAttribute('role','status');parent.append(status);
+    if(retry)parent.append(row('重试','refresh',retry))
+  }
+  async function load(){
+    const run=++generation;content.replaceChildren();title.textContent=cwd||'项目文件';
+    if(!cwd){content.append(row('选择远程项目','folder-open',()=>remotePicker(true)));return}
+    notice(content,'正在读取项目…');
+    try{
+      const projects=db.hostProjects?.length?db.hostProjects:(await directoryPage(null)).projects||[];
+      if(!active()||run!==generation)return;
+      const root=projectRootFor(cwd,projects.flatMap(project=>project.roots));
+      if(!root)throw Error('当前聊天目录不在主机的项目列表中');
+      const trim=path=>(isWindowsRoot(root)?path.replaceAll('\\','/'):path).replace(/\/+$/,'');
+      const base=trim(cwd).slice(trim(root).length).replace(/^\/+/, '');
+      const tree=element('div','project-explorer-tree'),reader=element('div','project-explorer-reader');
+      content.replaceChildren(tree,reader);reader.hidden=true;
+      let readId=0;
+      async function openFile(relative,trigger,line=null){
+        const id=++readId;tree.hidden=true;reader.hidden=false;reader.replaceChildren();
+        chat.projectFile={cwd,path:base?relative.slice(base.length+1):relative,line};save();
+        const back=row('返回文件列表','folder-open',()=>{
+          ++readId;delete chat.projectFile;save();reader.hidden=true;tree.hidden=false;(trigger||refresh).focus()
+        });
+        reader.append(back,element('strong','project-explorer-path',relative));
+        if(trigger)back.focus({preventScroll:true});
+        const result=element('div');reader.append(result);notice(result,'正在读取文件…');
+        try{
+          const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({root,path:projectEntryPath(root,relative),thread:chat.thread,workspace:cwd,workingTree:true})});
+          const data=await response.json();
+          if(!response.ok||typeof data.text!=='string')throw Error(data.error||'无法读取文件');
+          if(!active()||run!==generation||id!==readId)return;
+          const pre=element('pre','snapshot-code',data.text);result.replaceChildren(pre);
+          if(line){
+            const lines=data.text.split(/\r?\n/);
+            if(line<=lines.length&&line>=1){
+              const before=lines.slice(0,line-1),after=lines.slice(line),mark=element('mark','',lines[line-1]||' ');
+              pre.replaceChildren(before.length?before.join('\n')+'\n':'',mark,after.length?'\n'+after.join('\n'):'');
+              mark.scrollIntoView({block:'nearest'})
+            }else notice(result,'指定行已超出文件范围')
+          }
+        }catch(error){
+          if(active()&&run===generation&&id===readId){result.replaceChildren();notice(result,error.message,()=>openFile(relative,trigger,line))}
+        }
+      }
+      async function list(relative,container){
+        container.replaceChildren();notice(container,'正在读取目录…');
+        try{
+          const data=await projectDirectory(root,relative,chat.thread,cwd);
+          if(!active()||!container.isConnected||run!==generation)return;
+          container.replaceChildren();
+          const path=name=>relative?relative+'/'+name:name;
+          for(const name of data.folders){
+            const folder=element('details'),summary=element('summary','',name),children=element('div','project-explorer-children');
+            folder.append(summary,children);container.append(folder);
+            const folderPath=path(name);
+            folder.ontoggle=()=>{if(folder.open&&!children.childElementCount)void list(folderPath,children)};
+            const selected=chat.projectFile;
+            if(selected?.cwd===cwd&&(base?base+'/'+selected.path:selected.path).startsWith(folderPath+'/'))folder.open=true;
+          }
+          for(const name of data.files||[]){
+            const file=row(name,'file-text',()=>openFile(path(name),file));container.append(file)
+          }
+          if(data.truncated)notice(container,'仅显示部分目录条目');
+          else if(!data.files)notice(container,'此主机仅提供子目录列表');
+          else if(!container.childElementCount)notice(container,'目录为空')
+        }catch(error){
+          if(active()&&container.isConnected&&run===generation){
+            container.replaceChildren();notice(container,error.message,()=>list(relative,container))
+          }
+        }
+      }
+      const selected=chat.projectFile;
+      if(selected?.cwd===cwd&&typeof selected.path==='string'&&selected.path.split('/').every(p=>p&&p!=='.'&&p!=='..')){
+        void openFile(base?base+'/'+selected.path:selected.path,null,selected.line)
+      }
+      await list(base,tree)
+    }catch(error){
+      if(active()&&run===generation){content.replaceChildren();notice(content,error.message,load)}
+    }
+  }
+  void load()
+}
+async function searchProjectFiles(root,query,signal){
+  const res=await deviceFetch('/api/project-files',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,query}),signal});
   const data=await res.json();if(!res.ok)throw Error(res.status===404?'请使用新版客户端搜索主机项目':data.error);
   return data.files
 }
@@ -2410,7 +2681,7 @@ async function forkChat(c,lastTurn){
 const quotaButton=document.querySelector('#app-rail [data-action="account-usage"]');
 let quotaRequest,quotaCheckedAt=0,quotaHostReady=false;
 function renderQuotaRing(groups){
-  const windows=groups.find(group=>group.name.toLowerCase()==='codex')?.windows||[];
+  const windows=(groups.find(group=>group.name.toLowerCase()==='codex')||groups[0])?.windows||[];
   const weekly=windows.find(w=>w.windowDurationMins===10080);
   const short=windows.find(w=>w.windowDurationMins===300);
   const ring=document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -2448,15 +2719,16 @@ async function readQuota(){
   return quotaRequest
 }
 function refreshQuotaRing(){
-  if(quotaHostReady&&!mobile.matches&&document.visibilityState==='visible'&&Date.now()-quotaCheckedAt>=300000)
+  if(quotaHostReady&&document.visibilityState==='visible'&&Date.now()-quotaCheckedAt>=300000)
     void readQuota().catch(()=>renderQuotaRing([]))
 }
 renderQuotaRing([]);
 document.addEventListener('visibilitychange',refreshQuotaRing);
 mobile.addEventListener('change',refreshQuotaRing);
 setInterval(refreshQuotaRing,300000);
-async function accountUsage(){
-  const body=modal('账号用量'),status=element('p','quiet',('正在读取 '+receiverName+' 的用量…'));body.append(status);
+async function accountUsage(restore=false){
+  const body=openSidePage('account-usage','账号用量',restore===true);if(!body)return;
+  const status=element('p','quiet',('正在读取 '+receiverName+' 的用量…'));body.append(status);
   try{
     const data=await readQuota();
     if(!body.contains(status))return;
@@ -2466,13 +2738,13 @@ async function accountUsage(){
       for(const w of group.windows){
         const mins=w.windowDurationMins;
         const duration=mins>0?(mins%1440===0?mins/1440+' 天':mins%60===0?mins/60+' 小时':mins+' 分钟'):'当前窗口';
-        body.append(element('p','',duration+' · 已用 '+w.usedPercent+'%'));
-        const meter=element('progress','quota-meter');meter.max=100;meter.value=w.usedPercent;meter.setAttribute('aria-label',group.name+' '+duration);body.append(meter);
+        body.append(element('p','',duration+' · 剩余 '+Math.round(100-w.usedPercent)+'%'));
+        const meter=element('progress','quota-meter');meter.max=100;meter.value=100-w.usedPercent;meter.setAttribute('aria-label',group.name+' '+duration);body.append(meter);
         if(Number.isFinite(w.resetsAt))body.append(element('p','quiet','重置时间 '+new Date(w.resetsAt*1000).toLocaleString()))
       }
     }
   }catch(e){if(body.contains(status))status.textContent=e.message}
-  if(body.contains(status))body.append(row('刷新用量','server',accountUsage))
+  if(body.contains(status))body.append(row('刷新用量','server',()=>accountUsage(true)))
 }
 
 let activityRevision=0;
@@ -2549,6 +2821,11 @@ function firstTextTiming(job){
       timing.lateReader=reader.openedAt-job.hostFirstTextAt
   }
   const clock=job.hostClock,forwarded=job.hostFirstTextForwardedAt;
+  if(clock&&[clock.sentAt,clock.writeConfirmedAt,clock.receivedAt].every(Number.isSafeInteger)
+    &&clock.sentAt<=clock.writeConfirmedAt&&clock.writeConfirmedAt<=clock.receivedAt){
+    timing.commandWrite=clock.writeConfirmedAt-clock.sentAt;
+    timing.echoAfterWrite=clock.receivedAt-clock.writeConfirmedAt
+  }
   if(Number.isSafeInteger(forwarded)&&Number.isSafeInteger(job.hostFirstTextAt)&&forwarded>=job.hostFirstTextAt){
     timing.hostRead=forwarded-job.hostFirstTextAt;
     if(clock&&[clock.sentAt,clock.receivedAt,clock.hostAt].every(Number.isSafeInteger)&&clock.sentAt<=clock.receivedAt&&forwarded>=clock.hostAt){
@@ -2568,6 +2845,9 @@ function showFirstTextTiming(body,timing){
     element('p','quiet','接收端受理到确认轮次启动 · '+seconds(timing.startAck)),
     element('p','quiet','确认轮次启动到收到首段正文 · '+seconds(timing.afterAck)));
   if(timing.prepare!=null)body.append(element('p','quiet','接收端等待辅助程序就绪 · '+seconds(timing.prepare)));
+  if(timing.commandWrite!=null)body.append(
+    element('p','quiet','启动命令写入到确认 · '+seconds(timing.commandWrite)),
+    element('p','quiet','写入确认到接收端读出启动回显 · '+seconds(timing.echoAfterWrite)));
   if(timing.openThread!=null)body.append(element('p','quiet','主机打开聊天 · '+seconds(timing.openThread)));
   if(timing.host!==null)body.append(element('p','quiet','主机启动轮次到首段正文 · '+seconds(timing.host)));
   if(timing.hostRead!=null)body.append(element('p','quiet','主机适配器收到首段到转发程序读出 · '+timing.hostRead+' 毫秒'));
@@ -2579,11 +2859,32 @@ function showFirstTextTiming(body,timing){
   if(timing.lateReader!=null)body.append(element('p','quiet','主机已有首段正文到重新开始读取 · '+seconds(timing.lateReader)));
   if(timing.route)body.append(element('p','quiet','首段正文返回路径 · '+(routeLabels[timing.route]||timing.route)))
 }
-async function connectionView(){
+let connectionPageListeners;
+async function connectionView(restore=false){
   const thread=current().thread;
-  const body=modal('当前连接'),status=element('p','quiet',('正在通过 ds-harness-remote 检查 '+receiverName+'…'));
-  status.setAttribute('role','status');body.append(row('主机会话','server',()=>remotePicker(false)),status);
-  body.append(row('切换设备','server',()=>location.assign('/devices')));
+  const body=openSidePage('connection','当前连接',restore===true);if(!body)return;
+  const status=element('p','quiet',('正在通过 ds-harness-remote 检查 '+receiverName+'…'));
+  status.setAttribute('role','status');body.append(row('主机会话','server',()=>remotePicker(false)),status,recoveryStatus);
+
+  if(window.ReceiverConnection){
+    const toggle=row('后台保持连接','monitor',()=>window.ReceiverConnection.setEnabled(!window.ReceiverConnection.isEnabled()));
+    toggle.setAttribute('role','switch');
+    body.append(toggle);
+    const powerState=element('small','quiet');
+    if(window.ReceiverConnection.openAppSettings){
+      const settings=row('系统应用设置','settings',()=>window.ReceiverConnection.openAppSettings());
+      settings.append(powerState);body.append(settings)
+    }
+    const update=()=>{
+      toggle.setAttribute('aria-checked',String(window.ReceiverConnection.isEnabled()));
+      if(window.ReceiverConnection.isBatteryExempt)
+        powerState.textContent=window.ReceiverConnection.isBatteryExempt()?'已获 Android 省电豁免':'未获 Android 省电豁免'
+    };
+    update();
+    connectionPageListeners=new AbortController();
+    window.addEventListener('background-connection-changed',update,{signal:connectionPageListeners.signal});
+    window.addEventListener('focus',update,{signal:connectionPageListeners.signal})
+  }
   showFirstTextTiming(body,current().firstTextTiming);
   try{
     const res=await deviceFetch('/api/connection',{method:'POST'}),data=await res.json();
@@ -2617,9 +2918,10 @@ async function connectionView(){
       }
     }
   }catch(e){status.textContent=e.message||'本地服务暂时无法访问'}
-  if(body.contains(status))body.append(row('重新检查','server',connectionView))
+  if(body.contains(status))body.append(row('重新检查','server',()=>connectionView(true)))
 }
 function showPluginDestination(open,destination='plugins'){
+  connectionPageListeners?.abort();
   const page=$('plugin-page');
   page.hidden=!open;
   $('layout').classList.toggle('plugins-open',open);
@@ -2631,8 +2933,10 @@ function showPluginDestination(open,destination='plugins'){
   page.replaceChildren()
 }
 function restoreDestination(destination){
+  if(destination==='connection')connectionView(true);
   if(destination==='plugins')pluginsView(true);
   if(destination==='scheduled')scheduledView(true);
+  if(destination==='account-usage')accountUsage(true);
   if(destination==='settings')settings(true);
   if(destination==='keyboard-shortcuts')keyboardShortcuts(true)
 }
@@ -2863,13 +3167,14 @@ let drawerOpener;
 function dismissWorkbenchOverlay(){
   if(!document.dispatchEvent(new Event('workbench-back',{cancelable:true})))return true;
   const flyout=document.querySelector('.speed-flyout');
-  if(flyout?.hidePopover&&flyout.matches(':popover-open')){
-    flyout.hidePopover();flyout.parentElement.querySelector('.speed-trigger')?.focus();return true
+  if(WorkbenchComponents.dismissSpeedMenu(flyout)){
+    flyout.parentElement.querySelector('.speed-trigger')?.focus();return true
   }
   if($('dialog').open){closeDialog();return true}
   if(!$('file-mentions').hidden){closeMentions();return true}
   if($('layout').classList.contains('drawer')){toggleSidebar();return true}
   if(!$('thread-find').hidden){$('find-close').click();return true}
+  if(mobile.matches&&!$('workbench').hidden){$('work-hide').click();return true}
   return false
 }
 function toggleSidebar(){
@@ -3484,8 +3789,11 @@ async function* eventSnapshots(id){
   const watchdog=setInterval(()=>{if(performance.now()-lastActivity>=45000)closeStream()},5000);
   source.addEventListener?.('heartbeat',activity);
   function closeStream(){closed=true;source.close();wake?.()}
-  function resume(){if(!document.hidden)closeStream()}
+  function resume(){
+    if(!document.hidden&&(source.readyState!==EventSource.OPEN||performance.now()-lastActivity>=45000))closeStream()
+  }
   document.addEventListener('visibilitychange',resume);
+  window.addEventListener('receiver-reconnected',closeStream);
   window.addEventListener('offline',closeStream);
   source.onmessage=e=>{
     if(closed)return;
@@ -3505,6 +3813,7 @@ async function* eventSnapshots(id){
   }finally{
     clearInterval(watchdog);
     document.removeEventListener('visibilitychange',resume);
+    window.removeEventListener('receiver-reconnected',closeStream);
     window.removeEventListener('offline',closeStream);
     source.close()
   }
@@ -3625,7 +3934,7 @@ async function poll(c,firstAttempt=false){
     let lastView='';for await(const j of turnUpdates(id)){
     if(c.pending!==id)break;
     if(!j){
-      if(c.phase!=='正在重新连接…'){lastView='';c.phase='正在重新连接…';if(current()===c)messages(false)}
+      lastView='';
       continue
     }
     if(j.observedTextAt!=null&&c.firstTextTiming?.job!==id){
@@ -3664,12 +3973,12 @@ async function poll(c,firstAttempt=false){
         restoreUnsent(c,id);
         c.error=j.notSubmitted?(''+receiverName+' 离线。消息未发送，恢复连接后可重新发送。'):'主机上的另一个 Codex 实例正在写入此会话。消息未发送。';
         if(current()===c)composer()
-      }}else {c.items=j.progress?.items||[];c.preview=streamText(j);const labels={command_execution:'正在执行命令…',mcp_tool_call:'正在调用工具…',web_search:'正在搜索…',file_change:'正在处理文件…'};c.phase=j.reconnecting?(j.lastFollowFailure?.code==='REMOTE_HOST_OFFLINE'?(''+receiverName+' 离线，正在等待恢复…'):('正在重新连接 '+receiverName+'…')):j.status==='preparing'?('正在连接 '+receiverName+'…'):labels[j.progress?.item]||(j.progress?.started?'正在处理任务…':'正在启动 Codex…')}
+      }}else if(!j.reconnecting){c.items=j.progress?.items||[];c.preview=streamText(j);const labels={command_execution:'正在执行命令…',mcp_tool_call:'正在调用工具…',web_search:'正在搜索…',file_change:'正在处理文件…'};c.phase=j.status==='preparing'?('正在连接 '+receiverName+'…'):labels[j.progress?.item]||(j.progress?.started?'正在处理任务…':'正在启动 Codex…')}
     if(oldWait!==localWaitLabel(c))renderSidebarHistory();
     if(c.outbox?.id===id&&(j.turn||!c.pending))delete c.outbox;
     const content=ordered??[c.preview,c.items,j.stepPlan,j.proposedPlans];
     const view=JSON.stringify([c.pending,c.turn,c.phase,content,c.error,c.messages.length,c.messages.at(-1)?.images?.length]);
-    if(view!==lastView){lastView=view;if(!c.pending)save();if(current()===c)messages(false)}
+    if(view!==lastView){lastView=view;if(!c.pending)save();if(current()===c)messages(false);if(visibleSideChat?.chat===c)visibleSideChat.sync()}
     if(!$('activity-view').hidden){
       if(c.pending)renderActivity();
       else{hostActivity=hostActivity.filter(item=>item.thread!==c.thread);void refreshActivity()}
@@ -3679,7 +3988,7 @@ async function poll(c,firstAttempt=false){
       if(!ordered&&j.turn&&c.parent===id&&(j.parts?.length>1||j.progress?.items?.length))void refreshLegacyTurn(c,id,j.turn);
       break
     }
-  }}finally{if(observedChats.get(c)===id)observedChats.delete(c)}
+  }}finally{if(observedChats.get(c)===id)observedChats.delete(c);if(visibleSideChat?.chat===c)visibleSideChat.sync()}
 }
 async function steer(c){
   const draft=c.draft.trim(),files=c.files,id=c.pending||c.thread,turn=c.pending?c.turn:c.activeTurn;
@@ -3711,12 +4020,13 @@ $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedD
   let native;
   try{native=await nativePermissions()}catch(error){toast(error.message);return}
   if(current()!==c||c.pending||c.activeTurn||c.archived||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
-  if(native&&(c.collaborationMode==='plan'||turnModelOptions(c).serviceTier)){
+  const unsupportedSpeed=native&&turnModelOptions(c).serviceTier&&projectCatalog(c.cwd||'')?.canSetServiceTier!==true;
+  if(native&&(c.collaborationMode==='plan'||unsupportedSpeed)){
     const body=modal('调整聊天设置');
-    body.append(element('p','','当前主机连接仅支持普通聊天，并沿用主机速度。草稿已保留。'),
-      row('使用普通聊天并沿用主机速度','check',()=>{
+    body.append(element('p','',unsupportedSpeed?'当前主机的 Remote 插件只支持沿用主机速度。草稿已保留。':'当前主机连接只支持普通聊天。草稿已保留。'),
+      row(unsupportedSpeed?'使用普通聊天并沿用主机速度':'使用普通聊天','check',()=>{
         if(c!==current())return;
-        c.collaborationMode='default';delete c.speedChoice;save();closeDialog();composer();$('prompt').focus()
+        c.collaborationMode='default';if(unsupportedSpeed)delete c.speedChoice;save();closeDialog();composer();$('prompt').focus()
       }));
     return
   }
@@ -3908,6 +4218,51 @@ async function receiverAuthorized(){
   }
   if(!lastDirectorySignature||!$('receiver-setup').hidden)await refreshSidebar()
 }
+let recoveryTimer,recoveryPending=false,recoveryRequested=false,recoveryDelay=1000;
+const networkReads=new Set();
+const recoveryStatus=element('div','connection-recovery');
+recoveryStatus.setAttribute('role','status');
+async function recoverWorkbenchConnection(){
+  if(!devicePath||document.hidden)return;
+  clearTimeout(recoveryTimer);
+  if(recoveryPending){recoveryRequested=true;return}
+  recoveryPending=true;
+  const staleReads=[...networkReads];
+  recoveryStatus.textContent='正在检查与 '+receiverName+' 的连接…';
+  try{
+    const response=await deviceFetch('/api/resume',{method:'POST',signal:AbortSignal.timeout(65000)});
+    const result=await response.json();
+    if(!response.ok||!result.connected)throw Error(result.error||'连接未恢复');
+    const profile=document.querySelector('.rail-profile'),wasOffline=profile.hasAttribute('data-offline');
+    recoveryStatus.replaceChildren();delete profile.dataset.offline;recoveryDelay=1000;
+    if(document.hidden)return;
+    if(result.reused!==true||wasOffline){
+      directoryEvents?.close();directoryEvents=null;
+      threadWatch?.source.close();threadWatch=null;
+      window.dispatchEvent(new Event('receiver-reconnected'))
+    }
+    syncDirectoryEvents();syncThreadWatch();
+    for(const controller of staleReads)controller.abort();
+    await Promise.allSettled([firstDirectoryRequest,directoryHeadRequest]);
+    const chat=current();
+    if(chat?.thread&&!chat.pending)void refreshCurrentHistory(chat);
+    void refreshSidebar()
+  }catch(error){
+    if(document.hidden||leavingRevokedDevice)return;
+    const retry=element('button','','立即重试');retry.type='button';retry.onclick=recoverWorkbenchConnection;
+    document.querySelector('.rail-profile').dataset.offline='';
+    recoveryStatus.replaceChildren(document.createTextNode('正在等待 '+receiverName+' 恢复连接。'),retry);
+    recoveryTimer=setTimeout(recoverWorkbenchConnection,recoveryDelay);
+    recoveryDelay=Math.min(15000,recoveryDelay*2)
+  }finally{
+    recoveryPending=false;
+    if(recoveryRequested){recoveryRequested=false;clearTimeout(recoveryTimer);if(!document.hidden)recoveryTimer=setTimeout(recoverWorkbenchConnection,300)}
+  }
+}
+window.receiverNetworkResumed=()=>{
+  if(!document.hidden)return recoverWorkbenchConnection();
+  document.addEventListener('visibilitychange',recoverWorkbenchConnection,{once:true})
+};
 $('retry-pairing').onclick=async()=>{
   const button=$('retry-pairing');button.disabled=true;$('pairing-status').textContent='正在连接…';
   try{await refreshSidebar()}finally{button.disabled=false}
@@ -3921,8 +4276,12 @@ $('directory-next').onclick=async()=>{
 };
 async function threadApi(args,signal){
   const renames=new Map();renamesDuringReads.add(renames);
+  const controller=new AbortController(),cancel=()=>controller.abort();
+  const timeout=setTimeout(cancel,60000);
+  if(signal?.aborted)cancel();else signal?.addEventListener('abort',cancel,{once:true});
+  networkReads.add(controller);
   try{
-    const r=await deviceFetch('/api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args),signal});
+    const r=await deviceFetch('/api/threads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args),signal:controller.signal});
     const data=await r.json();
     if(!r.ok)throw Object.assign(Error(data.error||'读取失败'),{code:data.code});
     if(args.thread&&(data.thread!==args.thread||!Array.isArray(data.messages)))throw Error('返回的聊天记录与所选会话不匹配，请重新读取');
@@ -3933,7 +4292,7 @@ async function threadApi(args,signal){
       }
     }
     return data
-  }finally{renamesDuringReads.delete(renames)}
+  }finally{renamesDuringReads.delete(renames);networkReads.delete(controller);clearTimeout(timeout);signal?.removeEventListener('abort',cancel)}
 }
 async function remotePicker(projects){
   const body=modal(projects?'选择远程项目':(''+receiverName+' 的会话'),projects?document.querySelector('[data-action=project]'):null),panel=element('div','results'),status=element('p','quiet','正在读取 Codex 会话目录…');body.append(status,panel);
@@ -4091,7 +4450,7 @@ function fetchModelCatalog(cwd=''){
     const signal=AbortSignal.timeout(45000);
     const res=await deviceFetch('/api/models'+(cwd?'?cwd='+encodeURIComponent(cwd):''),{method:'POST',signal}),fresh=await res.json();
     if(!res.ok||!fresh.models?.length)throw Error(fresh.error||'主机没有返回模型');
-    const catalog={cwd,defaults:fresh.defaults,models:fresh.models,recentConfigurations:fresh.recentConfigurations||[],updated:Date.now()};
+    const catalog={cwd,canSetServiceTier:fresh.canSetServiceTier,defaults:fresh.defaults,models:fresh.models,recentConfigurations:fresh.recentConfigurations||[],updated:Date.now()};
     projectCatalogs.set(cwd,catalog);persistProjectCatalog(catalog);
     if((current()?.cwd||'')===cwd)db.modelCatalog=catalog;
     const defaults=fresh.defaults;
@@ -4208,14 +4567,14 @@ function repositionModelMenus(){
   if(!$('dialog').open||!$('dialog').classList.contains('model-menu'))return;
   if(!modelAnchorSupported||modelViewportConstrained(window.visualViewport)||$('dialog').matches('.model-command-menu,.model-zoomed'))positionModelMenu();
   const speed=$('dialog').querySelector('.speed-flyout');
-  if(speed?.matches(':popover-open'))positionSpeedMenu(speed)
+  if(WorkbenchComponents.speedMenuOpen(speed))positionSpeedMenu(speed)
 }
 let modelTransitionFrame=0;
 function followLayoutTransition(){
   if(modelTransitionFrame||(!mention?.command&&!$('dialog').open))return;
   modelTransitionFrame=requestAnimationFrame(()=>{
     modelTransitionFrame=0;repositionModelMenus();
-    if(document.getAnimations().some(animation=>animation instanceof CSSTransition&&animation.playState==='running'))
+    if(typeof CSSTransition!=='undefined'&&document.getAnimations?.().some(animation=>animation instanceof CSSTransition&&animation.playState==='running'))
       followLayoutTransition()
   })
 }
@@ -4295,7 +4654,7 @@ async function modelPicker(force=false,openList=false){
     function startingHeight(switching){
       if(!switching||matchMedia('(prefers-reduced-motion: reduce)').matches)return 0;
       const height=dialog.getBoundingClientRect().height;
-      for(const animation of dialog.getAnimations())if(animation.id==='model-view-size')animation.cancel();
+      for(const animation of dialog.getAnimations?.()||[])if(animation.id==='model-view-size')animation.cancel();
       return height
     }
     function resizeView(from){
@@ -4315,7 +4674,7 @@ async function modelPicker(force=false,openList=false){
     function simple(model){
       const fromList=panel.getAttribute('role')==='menu'&&!openList;
       const height=startingHeight(fromList);
-      if(fromList)for(const animation of panel.getAnimations())animation.cancel();
+      if(fromList)for(const animation of panel.getAnimations?.()||[])animation.cancel();
       panel.removeAttribute('role');panel.removeAttribute('aria-label');panel.onkeydown=null;WorkbenchComponents.clearModelOptions(panel);panel.replaceChildren();status.textContent='';
       const toggle=btn('选择模型','chevron-down',list,'modal-row model-view-toggle');
       const name=element('span','model-view-name',model?.name||composerModel(c).model||'默认');
@@ -4326,8 +4685,9 @@ async function modelPicker(force=false,openList=false){
       toggle.prepend(effort,name);
       const header=element('div','model-view-header');header.append(toggle);panel.append(header);
       if(fromList)animateViewEntry(header,-10,56);
-      if(!nativePermissionMode&&model?.serviceTiers?.length){
+      if(model?.serviceTiers?.length){
         WorkbenchComponents.renderSpeedMenu(header,{
+          unavailable:data.canSetServiceTier===false||(nativePermissionMode===true&&data.canSetServiceTier!==true),
           tiers:model.serviceTiers,choice:c.speedChoice?.model===model.id?c.speedChoice.id:undefined,
           effective:displayedSpeed(c,model),iconFor:tierIcon,position:positionSpeedMenu,
           select(id){
@@ -4384,7 +4744,7 @@ async function modelPicker(force=false,openList=false){
       if(openList){
         const active=activeConfiguration();
         const history=[...recentConfigurations(),...(data.recentConfigurations||[])];
-        const choices=recentModelChoices(data.models,history,active,nativePermissionMode);
+        const choices=recentModelChoices(data.models,history,active,data.canSetServiceTier===false||(nativePermissionMode===true&&data.canSetServiceTier!==true));
         for(const [index,{model,configuration:cfg}] of choices.entries()){
           const tierName=cfg.tier==='default'?'标准':model.serviceTiers?.find(t=>t.id===cfg.tier)?.name;
           const description=effortName(cfg.effort);
@@ -4435,8 +4795,8 @@ async function modelPicker(force=false,openList=false){
         const next={ArrowDown:forward,ArrowUp:backward,Tab:e.shiftKey?backward:forward,Home:0,End:enabled.length-1}[e.key];
         if(next!==undefined){
           e.preventDefault();e.stopPropagation();
-          for(const motion of dialog.getAnimations())if(motion.id==='model-view-size')motion.finish();
-          for(const motion of panel.getAnimations())motion.finish();
+          for(const motion of dialog.getAnimations?.()||[])if(motion.id==='model-view-size')motion.finish();
+          for(const motion of panel.getAnimations?.()||[])motion.finish();
           enabled[next].focus();
           enabled[next].scrollIntoView({block:'nearest',inline:'nearest'})
         }
@@ -4592,6 +4952,8 @@ function renderContextUsage(u){
   button.toggleAttribute('data-measured',remaining!==null);
   button.style.setProperty('--context-used',(remaining===null?0:100-remaining)+'%');
   const summary=remaining===null?'查看上下文用量':'上下文剩余 '+Math.round(remaining)+'%';
+  const value=button.querySelector('small');
+  value.textContent=remaining===null?'':Math.round(remaining)+'%';
   button.title=summary;button.setAttribute('aria-description',summary);
   const detail=$('context-usage-detail');
   if(!detail||!$('dialog').open)return;
@@ -4608,7 +4970,8 @@ function renderContextUsage(u){
 }
 function usageView(){
   const u=current().usage;if(!u)return;
-  const detail=element('div');detail.id='context-usage-detail';modal('上下文用量').append(detail);
+  const detail=element('div');detail.id='context-usage-detail';modal('上下文用量',$('usage-button')).append(detail);
+  $('dialog').classList.add('composer-menu');positionComposerPopup();
   renderContextUsage(u)
 }
 

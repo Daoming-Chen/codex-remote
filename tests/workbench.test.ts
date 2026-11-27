@@ -1,9 +1,30 @@
 import { renderWorkbenchPage } from '../apps/receiver/src/workbench-page.mts';
+import { searchDirectoryFiles } from '../apps/workbench/src/PanelSearch.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+
+test('native file search pauses after a bounded scan and can search dependency paths explicitly',async()=>{
+  const names=Array.from({length:16},(_,i)=>'dir'+(i+1)),visited:string[]=[];
+  let concurrent=0,peak=0;
+  const list=async(path:string)=>{
+    visited.push(path);peak=Math.max(peak,++concurrent);
+    await Promise.resolve();concurrent--;
+    return {folders:path?[]:[...names,'node_modules'],files:path==='dir16'||path==='node_modules'?['needle.ts']:[]};
+  };
+  const signal=new AbortController().signal;
+  const pages=searchDirectoryFiles('needle',signal,list);
+  const first=await pages.next();assert(!first.done);
+  assert(first.value.more&&first.value.skipped);
+  assert.equal(visited.length,12);assert.equal(peak,2);
+  const last=await pages.next();assert(!last.done);
+  assert.deepEqual(last.value.files,['dir16/needle.ts']);assert(!last.value.more);
+  assert(!visited.includes('node_modules'));
+  const explicit=await searchDirectoryFiles('node_modules/needle',signal,list).next();
+  assert(!explicit.done);assert.deepEqual(explicit.value.files,['node_modules/needle.ts']);
+});
 
 test('select an authorized host, preview and remove attachments, retain the draft', async () => {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH
@@ -136,7 +157,8 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.getByRole('button', {name: /改名/}).click();
     await page.waitForURL('**/devices/' + scope + '/');
     assert.equal(await page.locator('.hostline [data-receiver-name]').textContent(), host.name);
-    const hostLink = page.getByRole('link', {name: '切换设备，当前为 '+host.name});
+    const hostLink = page.locator('#composer-device');
+    assert.equal(await page.locator('.rail-profile').innerText(),'改主');
     const project = page.getByRole('button', {name: '选择远程项目'});
     for (const width of [1920, 820, 390]) {
       await page.setViewportSize({width, height: 1078});
@@ -267,7 +289,8 @@ test('restore a streaming turn after sending on another device with the same thr
     await send('第二台的提问');
     await messages.getByText('b 的最终回复', {exact: true}).waitFor();
     assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台正在流式输出|a 的最终回复/);
-    await page.getByRole('button', {name: 'Codex 连接信息'}).click();
+    await page.getByRole('button', {name: '设置',exact:true}).click();
+    await page.getByRole('button', {name: '连接信息',exact:true}).click();
     await page.getByText(/前台发送到页面收到首段正文/).waitFor();
     await page.keyboard.press('Escape');
     await select(0);
@@ -279,11 +302,22 @@ test('restore a streaming turn after sending on another device with the same thr
   } finally { await browser.close() }
 });
 
-test('touch selection sends the model and effort shown by the tablet composer', async () => {
+for (const mode of ['daemon', 'native', 'legacy'] as const) test('touch selection sends the model and effort shown by the tablet composer · ' + mode, async () => {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
   try {
     const page = await browser.newPage({hasTouch: true, isMobile: true, viewport: {width: 960, height: 720}, serviceWorkers: 'block'});
+    const errors: Error[] = [];
+    page.on('pageerror',error=>errors.push(error));
+    if (mode === 'native') await page.addInitScript(() => {
+      // Older WebViews lack both the methods and the corresponding selector syntax.
+      for (const name of ['showPopover','hidePopover','togglePopover']) Reflect.deleteProperty(HTMLElement.prototype,name);
+      const matches = Element.prototype.matches;
+      Object.defineProperty(Element.prototype,'matches',{value:function(this:Element,selector:string) {
+        if (selector.includes(':popover-open')) throw new DOMException('Unsupported selector','SyntaxError');
+        return matches.call(this,selector);
+      }});
+    });
     page.setDefaultTimeout(8000);
     const directory = process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/', import.meta.url));
     const scope = 'c'.repeat(64);
@@ -298,15 +332,21 @@ test('touch selection sends the model and effort shown by the tablet composer', 
         })});
       }
       if (path === base + '/api/models') return route.fulfill({json: {
+        canSetServiceTier: mode !== 'legacy',
         models: ['alpha', 'bravo'].map(id => ({id, name: id, isDefault: id === 'alpha',
+          serviceTiers: [{id: 'priority',name: 'Fast'}, {id: 'ultrafast',name: 'Ultrafast'}],
           efforts: ['low', 'medium', 'high'], defaultEffort: 'low'})), defaults: {model: 'alpha', effort: 'low'},
       }});
-      if (path === base + '/api/native-capability') return route.fulfill({json: {native: false}});
+      if (path === base + '/api/native-capability') return route.fulfill({json: {native: mode !== 'daemon'}});
       if (path === base + '/api/turn') return route.fulfill({json: {id: route.request().postDataJSON().id}});
       if (path.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: []}});
       return route.fulfill({path: directory + path});
     });
     await page.goto(origin + base + '/');
+    if (mode !== 'daemon') {
+      await page.locator('[data-action=permissions]').tap();
+      await page.getByRole('button', {name: '工作区写入（按需审批）', exact: true}).tap();
+    }
     await page.locator('#model-picker').tap();
     await page.locator('.model-view-toggle').tap();
     await page.getByRole('menuitemradio', {name: 'bravo', exact: true}).tap();
@@ -315,6 +355,49 @@ test('touch selection sends the model and effort shown by the tablet composer', 
     assert(box);
     await slider.tap({position: {x: box.width - 6, y: box.height / 2}});
     assert.equal(await slider.inputValue(), '2');
+    await page.locator('.speed-trigger').tap();
+    if (mode === 'native') {
+      const flyout = page.locator('dialog.speed-flyout[open]');
+      await flyout.waitFor();
+      await page.setViewportSize({width:780,height:540});
+      await page.waitForFunction(() => {
+        const panel = document.querySelector('dialog.speed-flyout')!.getBoundingClientRect();
+        const anchor = document.querySelector('.speed-trigger')!.getBoundingClientRect();
+        const side = anchor.left - 8 >= panel.width + 4 ? anchor.left - panel.width - 4 : anchor.right + 4;
+        return panel.width>0 && Math.abs(panel.left - Math.max(8,Math.min(side,innerWidth - 8 - panel.width)))<2 &&
+          panel.top>=7 && panel.bottom<=innerHeight-7;
+      });
+      await page.touchscreen.tap(2,2);
+      await flyout.waitFor({state:'hidden'});
+      assert(await page.locator('#dialog').isVisible());
+      await page.locator('.speed-trigger[aria-expanded=false]').waitFor();
+      await page.locator('.speed-trigger').tap();
+      const handled = await page.evaluate(() => (window as typeof window & {dismissWorkbenchOverlay:()=>boolean}).dismissWorkbenchOverlay());
+      assert(handled);
+      await flyout.waitFor({state:'hidden'});
+      assert(await page.locator('.speed-trigger').evaluate(el=>el===document.activeElement));
+      await page.locator('.speed-trigger').press('ArrowDown');
+      await flyout.press('Escape');
+      await flyout.waitFor({state:'hidden'});
+      assert(await page.locator('#dialog').isVisible());
+      await page.setViewportSize({width:960,height:720});
+      await page.locator('.speed-trigger').tap();
+    }
+    const tier = mode === 'daemon' ? 'Fast' : 'Ultrafast';
+    const choice = page.getByRole('menuitemradio', {name: tier,exact:true});
+    if (mode === 'legacy') {
+      assert(await choice.isDisabled());
+      await page.getByRole('menuitemradio', {name:'沿用主机设置'}).tap();
+    } else {
+      await choice.tap();
+    }
+    await page.reload();
+    if (mode !== 'legacy') {
+      await page.locator('#model-picker').tap();
+      await page.locator('.speed-trigger').tap();
+      assert.equal(await choice.getAttribute('aria-checked'), 'true');
+      await choice.tap();
+    }
     await page.touchscreen.tap(5, 5);
     await page.locator('#dialog').waitFor({state: 'hidden'});
     assert.equal(await page.locator('.model-trigger-name').innerText(), 'bravo');
@@ -323,6 +406,169 @@ test('touch selection sends the model and effort shown by the tablet composer', 
     const submitted = page.waitForRequest(req => req.url() === origin + base + '/api/turn' && req.method() === 'POST');
     await page.locator('#send').tap();
     const payload = (await submitted).postDataJSON();
+    assert.equal(payload.serviceTier, mode === 'legacy' ? null : mode === 'daemon' ? 'priority' : 'ultrafast');
     assert.deepEqual([payload.model, payload.effort, payload.prompt], ['bravo', 'high', '测试模型选择']);
+    assert.deepEqual(errors.map(e=>e.message),[]);
+  } finally { await browser.close() }
+});
+
+test('browse the selected host project and read nested working files on a tablet', async () => {
+  const browser = await chromium.launch(process.env.CHROMIUM_PATH
+    ? {executablePath: process.env.CHROMIUM_PATH} : {channel: 'msedge'});
+  try {
+    const page = await browser.newPage({hasTouch: true, isMobile: true, viewport: {width: 820,height: 900},serviceWorkers: 'block'});
+    page.setDefaultTimeout(8000);
+    const origin = 'http://localhost:49007', scope = 'd'.repeat(64), base = '/devices/' + scope;
+    const root = 'C:\\dev\\demo', project = {name:'平板项目', id:'fixture-project', roots:[root]};
+    const directory = process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/',import.meta.url));
+    let snapshot: unknown;
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === base + '/') return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
+        await readFile(directory + '/index.html','utf8'), {deviceName:'文件主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if (path === base + '/api/threads') return route.fulfill({json:{items:[],projects:[project]}});
+      if (path === base + '/api/project-directories') {
+        const {relative,workspace} = route.request().postDataJSON();
+        assert.equal(workspace,root);
+        return route.fulfill({json:{folders:relative ? [] : ['src'],files:relative ? ['note.txt'] : []}});
+      }
+      if (path === base + '/api/project-file-snapshot') {
+        snapshot = route.request().postDataJSON();
+        return route.fulfill({json:{source:'working-tree', text:'今天的工作区内容 <b>文本</b>'}});
+      }
+      if (path.includes('/api/')) return route.fulfill({json:{native:true, items:[],projects:[],models:[]}});
+      return route.fulfill({path:directory + path});
+    });
+    await page.goto(origin + base + '/');
+    await page.getByRole('button',{name:'选择远程项目',exact:true}).tap();
+    await page.locator('#dialog [data-project-option]').first().tap();
+    await page.getByRole('button',{name:'切换侧面板',exact:true}).tap();
+    await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
+    await page.locator('#dialog').getByRole('button',{name:'文件资源管理器',exact:true}).tap();
+    await page.locator('.project-explorer-tree summary').filter({hasText:'src'}).tap();
+    await page.getByRole('button',{name:'note.txt',exact:true}).tap();
+    await page.locator('.project-explorer-reader pre').waitFor();
+    assert.equal(await page.locator('.project-explorer-reader pre').innerText(),'今天的工作区内容 <b>文本</b>');
+    assert.deepEqual(snapshot,{root,path:root + '\\src\\note.txt',workspace:root,workingTree:true});
+    await page.reload();
+    await page.locator('.project-explorer-reader pre').waitFor();
+    await page.getByRole('button',{name:'返回文件列表',exact:true}).tap();
+    assert(await page.getByRole('button',{name:'note.txt',exact:true}).isVisible());
+  } finally { await browser.close() }
+});
+
+test('show tabs opens one combobox for project files and approved host web apps on a tablet', async () => {
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH
+    ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'msedge'});
+  try {
+    const page=await browser.newPage({hasTouch:true,isMobile:true,viewport:{width:820,height:900},serviceWorkers:'block'});
+    page.setDefaultTimeout(7000);
+    const origin='http://localhost:49010',scope='f'.repeat(64),base='/devices/'+scope;
+    const root='C:\\work\\demo',thread='00000000-0000-4000-8000-000000000010';
+    const project={id:'demo',name:'项目',roots:[root]},messages=[{role:'assistant',text:'这是一个已有的聊天。'}];
+    const assets=process.env.WORKBENCH_ASSET_DIR ?? fileURLToPath(new URL('../web/',import.meta.url));
+    const proxy='http://dsh-'+'c'.repeat(48)+'.localhost:5173';
+    let requestedPort=0,readPath='';
+    const childThread='00000000-0000-4000-8000-000000000012';
+    let sideJob='';
+    await page.addInitScript(({scope,root,thread,project,messages})=>{
+      const chat={id:thread,thread,cwd:root,projectId:project.id,messages,draft:'保留草稿',files:[],title:'已有聊天',updated:Date.now()};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:chat.id,chats:[chat],hostProjects:[project]}));
+    },{scope,root,thread,project,messages});
+    await page.route(proxy+'/**',route=>route.fulfill({contentType:'text/html',body:'QA Web app'}));
+    await page.route(origin+'/**',async route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(
+        await readFile(assets+'/index.html','utf8'),{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/native-capability')return route.fulfill({json:{native:true}});
+      if(path===base+'/api/threads')return route.fulfill({json:route.request().postDataJSON().thread
+        ? {thread,cwd:root,messages,projectId:project.id} : {items:[],projects:[project]}});
+      if(path===base+'/api/project-directories'){
+        const {relative}=route.request().postDataJSON();
+        if(relative==='slow')return;
+        return route.fulfill({json:{folders:relative?[]:['src'],files:relative==='src'?['note.txt']:[]}});
+      }
+      if(path===base+'/api/project-file-snapshot'){
+        readPath=route.request().postDataJSON().path;
+        return route.fulfill({json:{source:'working-tree',text:'项目文件内容'}});
+      }
+      if(path===base+'/api/web-preview/ports')return route.fulfill({json:{ports:[5173]}});
+      if(path===base+'/api/thread-fork'){
+        const request=route.request().postDataJSON();
+        assert.equal(request.thread,thread);assert.equal(request.sideChat,true);
+        return route.fulfill({json:{source:thread,thread:childThread}});
+      }
+      if(path===base+'/api/turn'){
+        const request=route.request().postDataJSON();
+        assert.equal(request.expectedThread,childThread);assert.equal(request.prompt,'侧边草稿');
+        sideJob=request.id;
+        return route.fulfill({json:{id:sideJob}});
+      }
+      if(sideJob&&path.startsWith(base+'/api/turn/'+sideJob)){
+        const snapshot={id:sideJob,status:'done',thread:childThread,turn:'side-turn',answer:'侧边回复'};
+        return path.endsWith('/events')
+          ? route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'})
+          : route.fulfill({json:snapshot});
+      }
+      if(path===base+'/api/web-preview/open'){
+        requestedPort=route.request().postDataJSON().port;
+        if(requestedPort===5174)return route.fulfill({status:403,json:{error:'主机未允许此端口'}});
+        return route.fulfill({json:{url:proxy+'/'}});
+      }
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:assets+path});
+    });
+    await page.goto(origin+base+'/');
+    await page.getByRole('button',{name:'显示标签页',exact:true}).tap();
+    const box=page.getByRole('combobox',{name:'搜索文件或输入 URL'});
+    assert(await page.getByRole('region',{name:'新标签页'}).isVisible());
+    await box.tap();
+    await box.fill('文件');
+    assert(await page.getByRole('option',{name:'文件资源管理器',exact:true}).isVisible());
+    const pending=page.waitForRequest(req=>req.url().endsWith('/api/project-directories')&&req.postDataJSON().relative==='slow');
+    await box.fill('slow/obsolete');
+    const obsolete=await pending;
+    const aborted=page.waitForEvent('requestfailed',req=>req===obsolete);
+    await box.fill('note');
+    await aborted;
+    await page.getByRole('option',{name:'src/note.txt'}).tap();
+    await page.locator('.project-explorer-reader pre').waitFor();
+    assert.equal(readPath,root+'\\src\\note.txt');
+    await page.getByRole('button',{name:'关闭 文件资源管理器',exact:true}).tap();
+    await box.fill('localhost:5174');
+    await page.getByRole('option',{name:'http://localhost:5174/'}).tap();
+    await page.getByText('主机未允许此端口').waitFor();
+    await page.getByRole('button',{name:'刷新端口'}).tap();
+    await page.getByRole('button',{name:'localhost:5173'}).waitFor();
+    await page.getByRole('button',{name:'关闭 浏览器',exact:true}).tap();
+    await box.fill('localhost:5173/demo?q=1#view');
+    await page.getByRole('option',{name:'http://localhost:5173/demo?q=1#view'}).tap();
+    await page.frameLocator('iframe[title="主机网页预览"]').getByText('QA Web app').waitFor();
+    assert.equal(requestedPort,5173);
+    assert.equal(await page.locator('iframe[title="主机网页预览"]').getAttribute('src'),proxy+'/demo?q=1#view');
+    await page.getByRole('textbox',{name:'主机网页地址'}).fill('localhost:5174');
+    await page.getByRole('button',{name:'打开',exact:true}).tap();
+    await page.getByText('主机未允许此端口').waitFor();
+    assert.equal(await page.locator('iframe[title="主机网页预览"]').count(),0);
+    await page.getByRole('button',{name:'关闭工作区',exact:true}).tap();
+    assert(await page.locator('#workbench').isHidden());
+    assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
+    await page.keyboard.press('Control+Alt+s');
+    const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
+    await sideDraft.fill('侧边草稿');
+    await page.getByRole('button',{name:'关闭 侧边聊天',exact:true}).tap();
+    await page.keyboard.press('Control+Alt+s');
+    assert.equal(await sideDraft.inputValue(),'侧边草稿');
+    assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
+    await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
+    await page.getByRole('dialog').getByRole('button',{name:'侧边聊天',exact:true}).tap();
+    assert.equal(await sideDraft.inputValue(),'');
+    assert.equal(await page.locator('#work-tabs .work-tab').count(),2);
+    await page.locator('#work-tabs .work-tab').first().tap();
+    assert.equal(await sideDraft.inputValue(),'侧边草稿');
+    await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
+    await page.locator('.side-chat-history').getByText('侧边回复',{exact:true}).waitFor();
+    assert.equal(await page.locator('#messages').getByText('侧边回复',{exact:true}).count(),0);
+    assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
   } finally { await browser.close() }
 });

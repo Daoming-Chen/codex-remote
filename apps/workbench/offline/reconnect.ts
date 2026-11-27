@@ -7,13 +7,15 @@ async function check(){
   clearTimeout(timer);
   if(checking||document.hidden)return;
   checking=true;
+  const request=new AbortController();
+  const timeout=window.setTimeout(()=>request.abort(),3000);
   try{
-    const response=await fetch('/api/client-version',{cache:'no-store',redirect:'error',signal:AbortSignal.timeout(3000)});
+    const response=await fetch('/api/client-version',{cache:'no-store',redirect:'error',signal:request.signal});
     if(response.ok&&/^[a-f0-9]{16}$/.test((await response.json()).version)){
       location.reload();return
     }
   }catch{}
-  finally{checking=false}
+  finally{clearTimeout(timeout);checking=false}
   if(!document.hidden){timer=window.setTimeout(check,delay);delay=Math.min(5000,delay*2)}
 }
 function resume(){clearTimeout(timer);delay=1000;if(!document.hidden)void check()}

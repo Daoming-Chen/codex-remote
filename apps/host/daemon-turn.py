@@ -479,8 +479,14 @@ def main():
             import fcntl
             source = str(uuid.UUID(sys.argv[2]))
             request = str(uuid.UUID(sys.argv[3]))
-            last_turn = str(uuid.UUID(sys.argv[4])) if len(sys.argv)>4 else None
+            args = sys.argv[4:]
+            side_instructions = None
+            if len(args) >= 2 and args[-2] == "--side-chat":
+                side_instructions = base64.b64decode(args[-1], validate=True).decode()
+                args = args[:-2]
+            last_turn = str(uuid.UUID(args[0])) if args else None
             receipt_key = source + (":"+last_turn if last_turn else "")
+            if side_instructions: receipt_key += ":side-chat"
             base = Path.home() / ".local/state/dsh-local-chat/forks"
             base.mkdir(mode=0o700, parents=True, exist_ok=True)
             with (base / request).open("a+", encoding="utf8") as receipt:
@@ -495,6 +501,7 @@ def main():
                     os.fsync(receipt.fileno())
                     params = {"threadId":source,"sandbox":"read-only","approvalPolicy":"never"}
                     if last_turn: params["lastTurnId"] = last_turn
+                    if side_instructions: params["developerInstructions"] = side_instructions
                     fork = client.call("thread/fork", params)
                     fork_id = str(uuid.UUID(fork["thread"]["id"]))
                     receipt.write(fork_id + "\n")

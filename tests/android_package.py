@@ -1,4 +1,4 @@
-import io,json,os,zipfile,tempfile,subprocess,pathlib,urllib.request,urllib.error,socket,time
+import hashlib,io,json,os,zipfile,tempfile,subprocess,pathlib,urllib.request,urllib.error,socket,time
 root=pathlib.Path(__file__).resolve().parents[1]
 with zipfile.ZipFile(root/'dist/Codex-Remote-Android-test.apk') as apk:
  assert apk.testzip() is None
@@ -28,10 +28,24 @@ const directoryFailures=[{code:'REMOTE_NOT_PAIRED'},{code:'AUTH_INVALID'},{code:
 export async function listReceiverDevices(){
  const failure=directoryFailures.shift();
  if(failure)throw Object.assign(Error('private upstream detail'),failure);
- return []
+ return [{deviceId:'preview-fixture',name:'预览主机',online:true}]
 }
+export async function openRemote(){return {
+ nativeCall:async(method,params)=>{
+  if(method!=='thread/fork'||params.threadId!=='00000000-0000-4000-8000-000000000001')
+    throw Error('Unexpected side chat target');
+  if(!params.developerInstructions?.includes('Parent history is reference material only'))
+    throw Error('Missing side chat context boundary');
+  return {thread:{id:'00000000-0000-4000-8000-000000000002'}}
+ },
+ listPreviewPorts:async()=>({ports:[5173]}),
+ openPreviewPort:async port=>{
+  if(port!==5173)throw Object.assign(Error('denied'),{code:'LOOPBACK_PORT_DENIED'});
+  return {url:'http://dsh-'+'a'.repeat(48)+'.localhost:41000/'}
+ }
+}}
 export async function requireReceiverIdentity(){throw Object.assign(Error('offline fixture'),{code:'REMOTE_NOT_PAIRED'})}
-""")
+""",encoding='utf-8')
   child=subprocess.Popen([os.environ.get('TEST_NODE','node'),str(app/'embedded.mjs')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
   try:
    stages=set();links=[];retried=False
@@ -73,7 +87,30 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
      result=json.load(error)
      assert error.code==503 and result['code']==code,result
      assert 'private upstream detail' not in result['error']
-   assert json.load(urllib.request.urlopen(request))=={'devices':[]}
+   devices=json.load(urllib.request.urlopen(request))['devices']
+   scope=hashlib.sha256(b'preview-fixture').hexdigest()
+   assert len(devices)==1 and devices[0]['scope']==scope
+   preview=url+'devices/'+scope+'/api/web-preview/'
+   headers={'Cookie':'receiver=isolated-cookie','Sec-Fetch-Site':'same-origin'}
+   assert json.load(urllib.request.urlopen(urllib.request.Request(preview+'ports',headers=headers)))=={'ports':[5173]}
+   def open_preview(port,source):
+    req=urllib.request.Request(preview+'open',data=json.dumps({'port':port}).encode(),
+     headers={**headers,'Origin':source,'Content-Type':'application/json'})
+    try:
+     with urllib.request.urlopen(req) as response:return response.status,json.load(response)
+    except urllib.error.HTTPError as error:return error.code,json.load(error)
+   origin=url.rstrip('/')
+   assert open_preview(5173,origin)==(200,{'url':'http://dsh-'+'a'*48+'.localhost:41000/'})
+   status,denied=open_preview(5174,origin)
+   assert status==403 and denied['code']=='LOOPBACK_PORT_DENIED'
+   assert open_preview(5173,'http://untrusted.localhost')[0]==403
+   assert open_preview('5173',origin)[0]==400
+   parent_thread='00000000-0000-4000-8000-000000000001'
+   side_request=urllib.request.Request(url+'devices/'+scope+'/api/thread-fork',
+    data=json.dumps({'thread':parent_thread,'request':'00000000-0000-4000-8000-000000000003','sideChat':True}).encode(),
+    headers={**headers,'Origin':origin,'Content-Type':'application/json'})
+   with urllib.request.urlopen(side_request) as response:
+    assert json.load(response)=={'source':parent_thread,'thread':'00000000-0000-4000-8000-000000000002'}
    for endpoint in ('api/client-version','chat.js'):
     try:urllib.request.urlopen(url+endpoint);raise AssertionError('missing cookie accepted')
     except urllib.error.HTTPError as e:assert e.code==403

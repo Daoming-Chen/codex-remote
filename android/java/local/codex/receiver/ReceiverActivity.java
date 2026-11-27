@@ -3,6 +3,9 @@ import android.app.*;
 import android.os.*;
 import android.content.*;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.webkit.*;
 import android.widget.*;
 import android.view.View;
@@ -18,8 +21,10 @@ public final class ReceiverActivity extends Activity {
     private static volatile String failure;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private WebView web;
+    private PreviewSurface preview;
     private static final int SELECT_ATTACHMENTS=1201;
     private static final int VOICE_MICROPHONE=1202;
+    private static final int CONNECTION_NOTIFICATIONS=1203;
     private PermissionRequest pendingMicrophone;
     private boolean requestingMicrophone;
     private ValueCallback<Uri[]> pendingFiles;
@@ -31,8 +36,43 @@ public final class ReceiverActivity extends Activity {
     private String origin,token,screen="";
     private static final String SAVED_PATH="workbenchPath";
     private String workbenchPath="/";
+    private static String lastWorkbenchPath="/";
     private boolean loaded, cookiePending, cookieFailed;
     private boolean pageReady, authorizationReady;
+    private boolean foreground, resumedBefore, needsRecovery=true, localPageFailed;
+    private String serviceRoute="";
+    private long pageRetryDelay=500;
+    private ConnectivityManager networks;
+    private final Runnable notifyRecovery=()->{
+        if(!foreground || !loaded || isDestroyed())return;
+        if(localPageFailed){
+            web.loadUrl(origin+workbenchPath);return;
+        }
+        if(!pageReady || !needsRecovery)return;
+        needsRecovery=false;
+        web.evaluateJavascript("window.receiverNetworkResumed?.()",null);
+    };
+    private void scheduleRecovery(long delay){
+        needsRecovery=true;
+        handler.removeCallbacks(notifyRecovery);
+        if(foreground)handler.postDelayed(notifyRecovery,delay);
+    }
+    private final ConnectivityManager.NetworkCallback networkCallback=new ConnectivityManager.NetworkCallback(){
+        private Network last;
+        private boolean validated;
+        @Override public void onAvailable(Network network){
+            last=network;validated=false;scheduleRecovery(500);
+        }
+        @Override public void onCapabilitiesChanged(Network network,NetworkCapabilities capabilities){
+            if(!network.equals(last))return;
+            boolean ready=capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            if(ready&&!validated)scheduleRecovery(500);
+            validated=ready;
+        }
+        @Override public void onLost(Network network){
+            if(network.equals(last)){last=null;validated=false;needsRecovery=true;}
+        }
+    };
     public static final class DraftStore {
         private final SharedPreferences drafts,attachments;
         DraftStore(Context context){
@@ -63,7 +103,7 @@ public final class ReceiverActivity extends Activity {
     }
     @Override public void onCreate(Bundle state){
         super.onCreate(state);
-        if(state!=null)workbenchPath=restorePath(state.getString(SAVED_PATH));
+        workbenchPath=state==null?lastWorkbenchPath:restorePath(state.getString(SAVED_PATH));
         root=getFilesDir();
         android.content.SharedPreferences prefs=getSharedPreferences("receiver",MODE_PRIVATE);
         int port=prefs.getInt("port",0);
@@ -80,8 +120,44 @@ public final class ReceiverActivity extends Activity {
                 return connection;
             }
         };
-        layout.addView(web,new LinearLayout.LayoutParams(-1,0,1));web.setVisibility(View.GONE);
+        FrameLayout workspace=new FrameLayout(this);
+        layout.addView(workspace,new LinearLayout.LayoutParams(-1,0,1));
+        workspace.addView(web);web.setVisibility(View.GONE);
+        preview=new PreviewSurface(this,workspace,web);
+        web.addJavascriptInterface(preview,"ReceiverPreview");
+        web.addJavascriptInterface(new Object(){
+            @JavascriptInterface public boolean isEnabled(){
+                return backgroundConnectionEnabled();
+            }
+            @JavascriptInterface public boolean isBatteryExempt(){
+                return getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(getPackageName());
+            }
+            @JavascriptInterface public void openAppSettings(){
+                runOnUiThread(()->{
+                    if(!foreground||!pageReady)return;
+                    Intent details=new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package",getPackageName(),null));
+                    if(details.resolveActivity(getPackageManager())!=null)startActivity(details);
+                    else Toast.makeText(ReceiverActivity.this,"无法打开系统应用设置",Toast.LENGTH_SHORT).show();
+                });
+            }
+            @JavascriptInterface public void setEnabled(boolean enabled){
+                runOnUiThread(()->{
+                    if(!foreground||!pageReady||!workbenchPath.startsWith("/devices/"))return;
+                    getSharedPreferences("receiver",MODE_PRIVATE).edit().putBoolean(ConnectionService.SETTING,enabled).apply();
+                    serviceRoute="";
+                    syncConnectionService();
+                    web.evaluateJavascript("window.dispatchEvent(new Event('background-connection-changed'))",null);
+                    if(enabled&&Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                        !=android.content.pm.PackageManager.PERMISSION_GRANTED){
+                        requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},CONNECTION_NOTIFICATIONS);
+                    }
+                });
+            }
+        },"ReceiverConnection");
         setContentView(layout);show("正在启动本机接收端…",null,null);
+        networks=getSystemService(ConnectivityManager.class);
+        networks.registerDefaultNetworkCallback(networkCallback,handler);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
         web.addJavascriptInterface(new DraftStore(this),"ReceiverDrafts");
@@ -133,9 +209,26 @@ public final class ReceiverActivity extends Activity {
             }
         });
         web.setWebViewClient(new WebViewClient(){
+            @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon){
+                preview.clear();
+                pageReady=false;localPageFailed=false;
+                Uri next=Uri.parse(url);
+                if(isWorkbenchOrigin(next))workbenchPath=restorePath(next.getEncodedPath());
+                if(workbenchPath.startsWith("/devices/"))needsRecovery=true;
+            }
+            @Override public void onReceivedError(WebView view,WebResourceRequest req,WebResourceError error){
+                if(!req.isForMainFrame()||!isWorkbenchOrigin(req.getUrl()))return;
+                localPageFailed=true;
+                scheduleRecovery(pageRetryDelay);
+                pageRetryDelay=Math.min(8000,pageRetryDelay*2);
+            }
             @Override public void onPageFinished(WebView view,String url){
-                if(isWorkbenchOrigin(Uri.parse(url))){
+                if(!localPageFailed&&isWorkbenchOrigin(Uri.parse(url))){
+                    lastWorkbenchPath=restorePath(Uri.parse(url).getEncodedPath());
+                    pageRetryDelay=500;
                     pageReady=true;refreshAuthorizedChat();
+                    syncConnectionService();
+                    if(needsRecovery)scheduleRecovery(0);
                 }
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest req){
@@ -164,6 +257,12 @@ public final class ReceiverActivity extends Activity {
     }
     @Override public void onRequestPermissionsResult(int code,String[] permissions,int[] results){
         super.onRequestPermissionsResult(code,permissions,results);
+        if(code==CONNECTION_NOTIFICATIONS){
+            if(results.length==1&&results[0]==android.content.pm.PackageManager.PERMISSION_GRANTED){
+                serviceRoute="";syncConnectionService();
+            }
+            return;
+        }
         if(code!=VOICE_MICROPHONE)return;
         requestingMicrophone=false;
         PermissionRequest request=pendingMicrophone;
@@ -192,7 +291,22 @@ public final class ReceiverActivity extends Activity {
         }
         finishFiles(files.isEmpty()?null:files.toArray(new Uri[0]));
     }
-    private static String activeToken;
+    private static volatile String activeToken;
+    static String runtimeToken(){return activeToken;}
+    private boolean backgroundConnectionEnabled(){
+        return getSharedPreferences("receiver",MODE_PRIVATE).getBoolean(ConnectionService.SETTING,true);
+    }
+    private void syncConnectionService(){
+        if(!foreground||!pageReady)return;
+        Intent intent=new Intent(this,ConnectionService.class);
+        boolean enabled=backgroundConnectionEnabled();
+        if(!enabled||!workbenchPath.startsWith("/devices/")){
+            serviceRoute="";stopService(intent);return;
+        }
+        if(serviceRoute.equals(workbenchPath))return;
+        startForegroundService(intent.putExtra("route",workbenchPath));
+        serviceRoute=workbenchPath;
+    }
     private void prepareAssets(File app) throws Exception {
         long installed=getPackageManager().getPackageInfo(getPackageName(),0).lastUpdateTime;
         File marker=new File(root,"assets-installed");
@@ -314,16 +428,22 @@ public final class ReceiverActivity extends Activity {
         }
         state.putString(SAVED_PATH,workbenchPath);
     }
-    @Override protected void onResume(){super.onResume();web.onResume();handler.post(refresh);}
-    @Override protected void onPause(){handler.removeCallbacks(refresh);web.onPause();super.onPause();}
+    @Override protected void onResume(){
+        super.onResume();foreground=true;web.onResume();preview.resume();handler.post(refresh);
+        syncConnectionService();
+        if(resumedBefore||needsRecovery)scheduleRecovery(350);
+        resumedBefore=true;
+    }
+    @Override protected void onPause(){foreground=false;handler.removeCallbacks(notifyRecovery);handler.removeCallbacks(refresh);preview.pause();web.onPause();super.onPause();}
     private void navigateBack(){
         if(loaded&&web.canGoBack())web.goBack();else super.onBackPressed();
     }
     @Override public void onBackPressed(){
+        if(preview!=null && preview.goBackIfFocused())return;
         if(!loaded||web.getVisibility()!=View.VISIBLE){navigateBack();return;}
         web.evaluateJavascript("typeof dismissWorkbenchOverlay==='function' && dismissWorkbenchOverlay()",handled->{
             if(!isFinishing()&&!isDestroyed()&&!"true".equals(handled))navigateBack();
         });
     }
-    @Override protected void onDestroy(){handler.removeCallbacks(refresh);finishFiles(null);web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){networks.unregisterNetworkCallback(networkCallback);handler.removeCallbacks(notifyRecovery);handler.removeCallbacks(refresh);finishFiles(null);preview.clear();web.destroy();super.onDestroy();}
 }

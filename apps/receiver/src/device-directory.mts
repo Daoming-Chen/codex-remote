@@ -28,11 +28,13 @@ export function deviceDirectoryError(error: {code?: unknown; name?: unknown; rea
     {code: 'DEVICE_DIRECTORY_FAILED', error: '读取 Remote 设备列表失败，请刷新设备。'};
 }
 
-export function createDeviceDirectory(discover: () => Promise<Host[]>) {
+export function createDeviceDirectory(discover: (signal: AbortSignal) => Promise<Host[]>) {
   const devices = new Map<string, RemoteDevice>();
   const subscribers = new Map<string, Map<ServerResponse, boolean>>();
   let checkedAt = 0;
   let inflight: Promise<RemoteDevice[]> | undefined;
+  let latest: Promise<RemoteDevice[]>;
+  let active: AbortController | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   const stale = () => Date.now() - checkedAt >= 30000;
 
@@ -47,9 +49,13 @@ export function createDeviceDirectory(discover: () => Promise<Host[]>) {
     }
   }
 
-  function list(): Promise<RemoteDevice[]> {
-    if (inflight) return inflight;
-    inflight = discover().then(hosts => {
+  function list(restart = false): Promise<RemoteDevice[]> {
+    if (inflight && !restart) return inflight;
+    active?.abort();
+    const request = new AbortController();
+    active = request;
+    inflight = discover(request.signal).then(hosts => {
+      request.signal.throwIfAborted();
       const next = hosts.map(host => ({
         ...host, name: host.name || '', scope: createHash('sha256').update(host.deviceId).digest('hex'),
       }));
@@ -69,8 +75,10 @@ export function createDeviceDirectory(discover: () => Promise<Host[]>) {
       closeStreams(true);
       return next;
     }).catch(error => {
+      if (request.signal.aborted && active !== request) return latest;
       checkedAt = 0; closeStreams(false); throw error;
-    }).finally(() => { inflight = undefined });
+    }).finally(() => { if (active === request) { inflight = undefined; active = undefined; } });
+    latest = inflight;
     return inflight;
   }
 

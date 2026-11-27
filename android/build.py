@@ -36,6 +36,7 @@ const androidStrictUtf8={decode(bytes){
 }};
 """+data
   if name=='index.html':
+   data=data.replace(b'<body>',b'<body class="android-receiver">')
    data=data.replace(b'<textarea rows="2" id="prompt"',b'<textarea data-android-ime rows="2" id="prompt"')
    data=data.decode().replace('<p>在这台设备的接收端解压目录运行以下命令，按提示完成 Remote 设备授权。</p><code>node transport.mjs --authorize</code>','<p>点击上方的设备授权按钮，授权后即可发送。</p>').encode()
   if name=='receiver-worker.js':
@@ -58,7 +59,9 @@ run(tool(jdk/'bin','javac'),'-encoding','UTF-8','--release','8','-classpath',jar
 run(tool(jdk/'bin','jar'),'cf',build/'classes.jar','-C',classes,'.')
 run(tool(bt,'d8','.bat'),'--lib',jar,'--min-api','26','--output',build,build/'classes.jar')
 raw=build/'unsigned.apk'
-run(tool(bt,'aapt2'),'link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',a/'assets','-o',raw)
+resources=build/'resources.zip'
+run(tool(bt,'aapt2'),'compile','--dir',a/'res','-o',resources)
+run(tool(bt,'aapt2'),'link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',a/'assets','-o',raw,resources)
 with zipfile.ZipFile(raw,'a',zipfile.ZIP_DEFLATED) as apk:
  apk.write(build/'classes.dex','classes.dex')
  for abi in ['arm64-v8a','x86_64']:

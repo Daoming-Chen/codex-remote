@@ -1,11 +1,15 @@
+import './compat/webview.js';
 import { render } from 'preact';
 export { renderAttachments } from './AttachmentTray.js';
+export { hostBrowserAddress, mountHostBrowser } from './HostBrowser.js';
+export { mountNewTabSearch, searchDirectoryFiles } from './PanelSearch.js';
 
-export function renderHomePanelToggle(container: HTMLElement, visible: boolean, pressed: boolean, toggle: () => void) {
-  render(visible ? <button class="icon" type="button" aria-label="切换侧面板" title="切换侧面板"
+export function renderPanelToggle(container: HTMLElement, home: boolean, pressed: boolean, toggle: () => void) {
+  const label = home ? '切换侧面板' : pressed ? '隐藏标签页' : '显示标签页';
+  render(<button class="icon" type="button" aria-label={label} title={label}
     aria-controls="workbench" aria-pressed={pressed} onClick={toggle}>
     <svg aria-hidden="true" style={{ transform: 'scaleX(-1)' }}><use href="/icons.svg#panel-left" /></svg>
-  </button> : null, container);
+  </button>, container);
 }
 
 interface WelcomeProps {
@@ -26,6 +30,6 @@ export function renderWelcome(container: HTMLElement, props: WelcomeProps) {
 export { sameConfiguration, recentModelChoices } from './models/configurations.js';
 export { renderModelSearch } from './models/ModelSearch.js';
 export { renderEffortControl } from './models/EffortControl.js';
-export { renderSpeedMenu } from './models/SpeedMenu.js';
+export { renderSpeedMenu, speedMenuOpen, dismissSpeedMenu } from './models/SpeedMenu.js';
 export { renderModelOptions, clearModelOptions } from './models/ModelOptions.js';
 export { permissionLabel, renderPermissionChoices } from './PermissionChoices.js';

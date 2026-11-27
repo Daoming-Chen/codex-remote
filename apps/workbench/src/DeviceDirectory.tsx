@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { isRemoteDevice, type RemoteDevice as Device } from '../../../packages/protocol/devices.js';
 
 declare global {
-  interface Window { receiverAuthorized?: () => void }
+  interface Window { receiverAuthorized?: () => void; receiverNetworkResumed?: () => void }
 }
 const selectionKey = 'codex-receiver-selected-device';
 const devicePath = (device: Device) => '/devices/' + encodeURIComponent(device.scope) + '/';
@@ -23,6 +23,8 @@ function DeviceDirectory() {
     let queued = false;
     let timer: number | undefined;
     const lifetime = new AbortController();
+    let pending: AbortController | undefined;
+    let resumeNetwork = false;
     async function load() {
       window.clearTimeout(timer);
       if (active || document.hidden) return;
@@ -30,25 +32,36 @@ function DeviceDirectory() {
       active = true;
       setLoading(true);
       try {
-        const response = await fetch('/api/devices', { method: 'POST', signal: lifetime.signal });
-        const data = await response.json();
+        const request = new AbortController();
+        pending = request;
+        const timeout = window.setTimeout(() => request.abort(), 25000);
+        let response, data;
+        try {
+          const headers: Record<string,string> = resumeNetwork ? {'X-Receiver-Network-Resumed':'1'} : {};
+          resumeNetwork = false;
+          response = await fetch('/api/devices', { method: 'POST', headers, signal: request.signal });
+          data = await response.json();
+        } finally { clearTimeout(timeout); pending = undefined; }
         if (queued || lifetime.signal.aborted) return;
         if (!response.ok || !Array.isArray(data.devices) || !data.devices.every(isRemoteDevice)) throw Error(data.error || '无法获取设备');
         const list: Device[] = data.devices;
         const previous = localStorage.getItem(selectionKey);
         const saved = list.find(device => device.deviceId === previous);
-        const restore = first;
-        first = false;
+        const restore = first && ((location.pathname === '/' && !location.hash) ||
+          location.hash === '#directory-unavailable');
+        const waiting = restore && !!saved && saved.online !== true;
+        first = waiting;
         setDevices(list);
         setLast(previous);
         setUnavailable(false);
-        if (restore && saved?.online === true && location.pathname === '/' && !location.hash) {
+        if (restore && saved?.online === true) {
           setStatus('正在打开 ' + (saved.name || saved.deviceId) + '…');
           location.replace(devicePath(saved));
           return;
         }
         setStatus(!list.length ? '当前账号暂无已授权设备'
           : previous && !saved ? '上次使用的设备已不在授权列表中。'
+          : waiting ? '正在等待上次使用的主机上线，也可以选择其他设备。'
           : location.hash === '#directory-unavailable' ? '设备列表已恢复，请重新选择主机。' : '');
       } catch (error) {
         if (queued || lifetime.signal.aborted) return;
@@ -64,6 +77,13 @@ function DeviceDirectory() {
       }
     }
     const stopTimer = () => window.clearTimeout(timer);
+    const resume = () => {
+      if (document.hidden) return;
+      resumeNetwork = true;
+      if (pending) { queued = true; pending.abort(); }
+      else void load();
+    };
+    window.receiverNetworkResumed = resume;
     const visibility = () => document.hidden ? stopTimer() : void load();
     const show = (event: PageTransitionEvent) => { if (event.persisted) void load() };
     refresh.current = load;
@@ -77,7 +97,8 @@ function DeviceDirectory() {
     window.addEventListener('pagehide', stopTimer);
     void load();
     return () => {
-      lifetime.abort(); stopTimer();
+      lifetime.abort(); pending?.abort(); stopTimer();
+      delete window.receiverNetworkResumed;
       delete window.receiverAuthorized;
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pageshow', show);
@@ -94,7 +115,7 @@ function DeviceDirectory() {
   const names = new Map<string, number>();
   for (const device of devices) names.set(device.name, (names.get(device.name) || 0) + 1);
   return <>
-    <h1>选择 Codex 主机</h1>
+    <h1>选择主机</h1>
     <p id="status" role="status">{status}</p>
     <div id="devices">{devices.map(device =>
       <button key={device.deviceId} disabled={unavailable || device.online === false} onClick={() => select(device)}>

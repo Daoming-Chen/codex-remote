@@ -8,7 +8,7 @@ const moduleUrl=new URL(import.meta.url);
 const deviceId=moduleUrl.searchParams.get('device')||process.env.CODEX_RECEIVER_DEVICE_ID;
 const transportUrl=new URL('./transport.mjs',import.meta.url);
 if(deviceId)transportUrl.searchParams.set('device',deviceId);
-const {openRemote,getLastDisconnect,remoteLines,requireReceiverIdentity,listReceiverDevices,bindReceiverDevice}=await import(transportUrl.href);
+const {openRemote,recoverRemote,getLastDisconnect,remoteLines,requireReceiverIdentity,listReceiverDevices,bindReceiverDevice}=await import(transportUrl.href);
 
 
 import {createHash,randomUUID} from 'node:crypto';
@@ -306,18 +306,21 @@ let pluginCatalog;
 const pluginPages=new Map();
 async function nativeModels(call){
   const models=[];
+  let canSetServiceTier=true;
   let cursor;
   do{
     const page=await call('model/list',{limit:100,...(cursor?{cursor}:{})});
+    canSetServiceTier&&=page.remoteServiceTierForTurn===true;
     for(const m of page.data){
       models.push({id:m.model,name:m.displayName,isDefault:m.isDefault,description:m.description||'',
-        retirementAt:m.upgradeInfo?.retirementAt,serviceTiers:m.serviceTiers||[],defaultEffort:m.defaultReasoningEffort,
+        retirementAt:m.upgradeInfo?.retirementAt,serviceTiers:(m.serviceTiers||[]).filter(tier=>tier.id==='priority'||tier.id==='ultrafast'),
+        defaultEffort:m.defaultReasoningEffort,
         efforts:(m.supportedReasoningEfforts||[]).map(option=>option.reasoningEffort)})
     }
     cursor=page.nextCursor
   }while(cursor);
   const selected=models.find(m=>m.isDefault);
-  return {models,defaults:{model:selected?.id,effort:selected?.defaultEffort},recentConfigurations:[]}
+  return {models,canSetServiceTier,defaults:{model:selected?.id,effort:selected?.defaultEffort},recentConfigurations:[]}
 }
 async function models(cwd=''){
   const cached=catalogs.get(cwd);
@@ -374,6 +377,18 @@ function projectDirectoryKey(path){
   const windows=/^(?:[a-z]:[\\/]|\\\\|\/\/)/i.test(path);
   const canonical=windows?path.replaceAll('\\','/').toLowerCase():path;
   return canonical.replace(/\/+$/,'')||'/'
+}
+function projectPathInside(paths,root,candidate){
+  if(typeof candidate!=='string'||!paths.isAbsolute(candidate))return false;
+  const relative=paths.relative(root,candidate);
+  return relative!=='..'&&!relative.startsWith('..'+paths.sep)&&!paths.isAbsolute(relative)
+}
+async function workspaceFileThread(call,paths,root,workspace,thread){
+  if(!projectPathInside(paths,root,workspace))return null;
+  const candidates=thread?[(await call('thread/read',{threadId:thread,includeTurns:false})).thread]:
+    (await call('thread/list',{cwd:[workspace],limit:1})).data;
+  return candidates.find(t=>uuid.test(t?.id)&&(!thread||t.id===thread)&&projectPathInside(paths,root,t.cwd)&&
+    (thread||paths.relative(workspace,t.cwd)===''))
 }
 function nativeProjectId(thread){
   if(thread.projectId)return thread.projectId;
@@ -902,7 +917,7 @@ async function nativeTurn(job,prompt,previous,call){
       if(job.nativeSubmitting)throw Error('主机可能已收到消息，请在主机会话中核对后再发送');
       if(pick.sandbox!=='remote-workspace'&&!(pick.sandbox==='danger-full-access'&&pick.approvalPolicy==='never'))
         throw Error('该主机支持工作区写入（按需审批）和完全访问，请在任务权限中选择');
-      if(pick.collaborationMode==='plan'||pick.serviceTier&&pick.serviceTier!=='default')throw Error('该主机接口尚不支持所选计划模式或速度档位');
+      if(pick.collaborationMode==='plan')throw Error('该主机接口尚不支持计划模式');
       const permissionPreset=pick.sandbox==='remote-workspace'?'workspace-write':pick.sandbox;
       const options={permissionPreset,...(pick.model?{model:pick.model}:{})};
       if(!previous&&!job.cwd){
@@ -921,7 +936,8 @@ async function nativeTurn(job,prompt,previous,call){
       job.nativeSubmitting=true;await save(job);
       if(!previous)await subscribe();
       const input=nativeInput(prompt,pick.structuredInput);
-      const result=await call('turn/start',{threadId:job.thread,input,...options,...(pick.effort?{effort:pick.effort}:{})});
+      const result=await call('turn/start',{threadId:job.thread,input,...options,...(pick.effort?{effort:pick.effort}:{}),
+        ...(pick.serviceTier?{serviceTierForTurn:pick.serviceTier}:{})});
       job.turn=result.turn.id;
       job.observedStartAt=Date.now();
       job.progress={started:true};
@@ -1057,7 +1073,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
           }
         }
         const device=hostDirectory.devices.get(scope);
-        if(path==='/'&&(!device||device.online===false)){
+        if(path==='/'&&!device){
           res.writeHead(303,{Location:'/devices','Cache-Control':'no-store'});return res.end()
         }
         if(!device){res.setHeader('X-Receiver-Device-Access','revoked');return json(403,{error:'当前账号无法访问此设备'})}
@@ -1077,9 +1093,13 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         return res.end(await readFile(new URL('devices.html',import.meta.url)))
       }
     }
+    if(req.method==='POST'&&req.url==='/api/resume'){
+      if(!deviceId||req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
+      const reused=await recoverRemote();return json(200,{connected:true,reused})
+    }
     if(req.method==='POST'&&req.url==='/api/devices'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
-      return json(200,{devices:await hostDirectory.list()})
+      return json(200,{devices:await hostDirectory.list(req.headers['x-receiver-network-resumed']==='1')})
     }
     if(req.method==='GET'&&req.url==='/api/directory-events'){
       if(req.headers['sec-fetch-site']!=='same-origin')return json(403,{error:'无效订阅'});
@@ -1176,6 +1196,18 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     if(req.method==='POST'&&req.url==='/api/account-usage'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
+      const native=deviceId&&(await openRemote()).nativeCall;
+      if(native){
+        const limits=await native('account/rateLimits/read',{});
+        const buckets=limits.rateLimitsByLimitId||{codex:limits.rateLimits};
+        const groups=[];
+        for(const [key,bucket] of Object.entries(buckets)){
+          if(!bucket)continue;
+          const windows=[bucket.primary,bucket.secondary].filter(w=>Number.isFinite(w?.usedPercent));
+          if(windows.length)groups.push({name:bucket.limitName||key,windows})
+        }
+        return json(200,{groups})
+      }
       const path=await runtimeDriver();
       const data=JSON.parse(await readRemote('timeout 35 python3 '+path+' --usage'));
       if(!Array.isArray(data.groups))return json(503,{error:'主机暂时无法读取账号用量'});
@@ -1214,6 +1246,24 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       return json(200,snapshot)
     }
     if(req.method==='GET'&&req.url==='/api/native-capability')return json(200,{native:!!(deviceId&&(await openRemote()).nativeCall)});
+    if(req.method==='GET'&&req.url==='/api/web-preview/ports'){
+      if(req.headers['sec-fetch-site']!=='same-origin')return json(403,{error:'无效请求来源'});
+      const {ports}=await (await openRemote()).listPreviewPorts();
+      if(!Array.isArray(ports)||ports.length>16||!ports.every(v=>Number.isInteger(v)&&v>=1024&&v<=65535))
+        return json(502,{error:'主机返回了无效的预览端口列表'});
+      return json(200,{ports})
+    }
+    if(req.method==='POST'&&req.url==='/api/web-preview/open'){
+      if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
+      const parts=[];let size=0;
+      for await(const part of req){size+=part.length;if(size>128)return json(413,{error:'请求过长'});parts.push(part)}
+      const request=JSON.parse(Buffer.concat(parts));
+      if(!Number.isInteger(request?.port)||request.port<1024||request.port>65535)return json(400,{error:'请输入 1024 到 65535 之间的预览端口'});
+      const {url}=await (await openRemote()).openPreviewPort(request.port);
+      if(typeof url!=='string'||!/^http:\/\/dsh-[a-f0-9]{48}\.localhost:[1-9]\d{0,4}\/$/.test(url)||!URL.canParse(url))
+        return json(502,{error:'接收端未能创建网页预览地址'});
+      return json(200,{url})
+    }
     if(req.method==='GET'&&req.url==='/api/capabilities')return json(200,{planMode:!(deviceId&&(await openRemote()).nativeCall),projectFiles:true,commandApproval:true,fullAccess:true,voiceChat:true});
     if(req.method==='POST'&&['/api/plugins/page','/api/plugins/detail'].includes(req.url)){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
@@ -1249,50 +1299,50 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const parts=[];let size=0;
       for await(const part of req){size+=part.length;if(size>16384)return json(413,{error:'路径过长'});parts.push(part)}
-      const {root,path,thread}=JSON.parse(Buffer.concat(parts));
+      const {root,path,thread,workspace=root,workingTree=false}=JSON.parse(Buffer.concat(parts));
       if(typeof root!=='string'||typeof path!=='string')return json(400,{error:'路径无效'});
       if([...nativeRoots.values()].some(roots=>roots.includes(root))){
-        const paths=/^[a-z]:[\\/]/i.test(root)?win32:posix;
+        const paths=/^(?:[a-z]:|\\\\)/i.test(root)?win32:posix;
         const relative=paths.relative(root,path);
         const within=name=>name&&name!=='..'&&!name.startsWith('..'+paths.sep)&&!paths.isAbsolute(name);
-        if(!uuid.test(thread)||!paths.isAbsolute(path)||!within(relative)||relative.split(paths.sep).some(part=>/[:\x00-\x1f]/.test(part)||(paths===win32&&/[. ]$/.test(part))))
+        if((thread!=null&&!uuid.test(thread))||!paths.isAbsolute(path)||!within(relative)||relative.split(paths.sep).some(part=>/[:\x00-\x1f]/.test(part)||(paths===win32&&/[. ]$/.test(part))))
           return json(400,{error:'请选择当前聊天项目内的文件'});
         const ctx=await openRemote();
         if(!ctx.readWorkspaceFile)return json(400,{error:'当前主机未提供文件预览'});
-        const info=(await ctx.nativeCall('thread/read',{threadId:thread,includeTurns:false})).thread;
-        if(info?.id!==thread||!paths.isAbsolute(info.cwd||''))return json(403,{error:'聊天目录不可用'});
-        const scope=paths.relative(root,info.cwd),file=paths.relative(info.cwd,path);
-        if((scope&&!within(scope))||!within(file))return json(403,{error:'文件不在当前聊天目录内'});
-        const result=await ctx.readWorkspaceFile(thread,file.split(paths.sep).join('/'));
+        const info=await workspaceFileThread(ctx.nativeCall,paths,root,workspace,thread);
+        if(!info)return json(403,{error:'当前项目还没有可用于预览的主机聊天'});
+        const file=paths.relative(info.cwd,path);
+        if(!within(file))return json(403,{error:'文件不在当前聊天目录内'});
+        const result=await ctx.readWorkspaceFile(info.id,file.split(paths.sep).join('/'));
         if(!paths.isAbsolute(result.absolutePath||'')||paths.relative(path,result.absolutePath)!=='')return json(409,{error:'主机返回的路径不一致'});
         if(result.eof!==true||typeof result.text!=='string'||result.text.includes('\0')||Buffer.byteLength(result.text)>512*1024)return json(422,{error:'仅支持预览较短的文本文件'});
         return json(200,{text:result.text,source:'working-tree'})
       }
       if(!fileSearchRoots.has(root)||typeof path!=='string'||!path.startsWith(root+'/')||path.includes('\0'))return json(400,{error:'请选择主机项目内的文件'});
-      return json(200,await remoteThreads('project-file-snapshot',JSON.stringify({root,path})))
+      return json(200,await remoteThreads(workingTree===true?'project-working-file':'project-file-snapshot',JSON.stringify({root,path})))
     }
     if(req.method==='POST'&&req.url==='/api/project-directories'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const chunks=[];let size=0;
       for await(const chunk of req){size+=chunk.length;if(size>16384)return json(413,{error:'路径过长'});chunks.push(chunk)}
-      const {root,relative,thread}=JSON.parse(Buffer.concat(chunks));
-      if(![...nativeRoots.values()].some(roots=>roots.includes(root)))return json(400,{error:'请先加载当前主机的项目目录'});
+      const {root,relative,thread,workspace=root}=JSON.parse(Buffer.concat(chunks));
+      const nativeRoot=[...nativeRoots.values()].some(roots=>roots.includes(root));
+      if(!nativeRoot&&!fileSearchRoots.has(root))return json(400,{error:'请先加载当前主机的项目目录'});
       const paths=/^(?:[a-z]:|\\\\)/i.test(root)?win32:posix;
       const valid=name=>typeof name==='string'&&name&&name!=='.'&&name!=='..'&&!/[\\/:\x00-\x1f]/.test(name)&&
         (paths!==win32||!/[. ]$/.test(name));
       if(typeof relative!=='string'||(relative&&!relative.split('/').every(valid)))return json(400,{error:'请选择项目内的目录'});
       const requested=paths.join(root,relative);
+      if(!nativeRoot)return json(200,await remoteThreads('project-directories',JSON.stringify({root,path:requested})));
       const ctx=deviceId&&await openRemote(),call=ctx?.nativeCall;
       if(!call)return json(400,{error:'当前连接未提供目录浏览'});
       if(thread!=null&&!uuid.test(thread))return json(400,{error:'无效的聊天标识'});
       if(ctx.listWorkspaceFiles){
         // The file API is scoped to a host thread, even when the composer is new.
-        const candidates=thread?[(await call('thread/read',{threadId:thread,includeTurns:false})).thread]:
-          (await call('thread/list',{cwd:[root],limit:1})).data;
-        const match=candidates.find(t=>uuid.test(t?.id)&&paths.isAbsolute(t.cwd||'')&&paths.relative(root,t.cwd)==='');
-        if(match){
+        const match=await workspaceFileThread(call,paths,root,workspace,thread);
+        if(match&&projectPathInside(paths,match.cwd,requested)){
           try{
-            const listing=await ctx.listWorkspaceFiles(match.id,relative||'.');
+            const listing=await ctx.listWorkspaceFiles(match.id,paths.relative(match.cwd,requested).split(paths.sep).join('/')||'.');
             const names=type=>listing.entries.filter(e=>e.type===type&&valid(e.name)).map(e=>e.name);
             return json(200,{folders:names('directory'),files:names('file'),truncated:listing.truncated===true})
           }catch(error){if(!['FEATURE_NOT_SUPPORTED','METHOD_NOT_FOUND'].includes(error.code))throw error}
@@ -1381,12 +1431,14 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     if(req.method==='POST'&&req.url==='/api/thread-fork'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const chunks=[];let bytes=0;for await(const c of req){bytes+=c.length;if(bytes>4096)return json(413,{error:'请求过长'});chunks.push(c)}
-      const {thread,request,lastTurn}=JSON.parse(Buffer.concat(chunks));
+      const {thread,request,lastTurn,sideChat=false}=JSON.parse(Buffer.concat(chunks));
+      if(typeof sideChat!=='boolean')return json(400,{error:'无效侧边聊天请求'});
+      const sideInstructions='Answer the follow-up in this side chat. Parent history is reference material only. Do not resume parent tasks or use subagents. Inspect as needed and only change workspace state when explicitly requested here.';
       if(!uuid.test(thread)||!uuid.test(request)||(lastTurn!==undefined&&!uuid.test(lastTurn)))return json(400,{error:'无效会话、轮次或请求'});
       const native=deviceId&&(await openRemote()).nativeCall;
       if(native){
         const receipt=new URL('fork-'+request+'.json',stateDir);
-        const key=JSON.stringify([thread,lastTurn||null]);
+        const key=JSON.stringify(sideChat?[thread,lastTurn||null,'sideChat']:[thread,lastTurn||null]);
         try{await writeFile(receipt,JSON.stringify({key}),{flag:'wx',mode:0o600})}
         catch(error){
           if(error.code!=='EEXIST')throw error;
@@ -1395,7 +1447,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
           if(!uuid.test(saved.thread))return json(409,{error:'尚未收到分支结果，请核对主机会话目录'});
           return json(200,{source:thread,thread:saved.thread})
         }
-        const result=await native('thread/fork',{threadId:thread,...(lastTurn?{lastTurnId:lastTurn}:{})});
+        const result=await native('thread/fork',{threadId:thread,...(lastTurn?{lastTurnId:lastTurn}:{}),...(sideChat?{developerInstructions:sideInstructions}:{})});
         const fork=result.thread?.id;
         if(!uuid.test(fork)||fork===thread)return json(409,{error:'主机尚未确认分支'});
         const temp=new URL('fork-'+randomUUID()+'.tmp',stateDir);
@@ -1403,7 +1455,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         directoryChanged();return json(200,{source:thread,thread:fork})
       }
       const path=await runtimeDriver();
-      const fork=JSON.parse(await readRemote('timeout 45 python3 '+path+' --fork '+thread+' '+request+(lastTurn?' '+lastTurn:'')));
+      const fork=JSON.parse(await readRemote('timeout 45 python3 '+path+' --fork '+thread+' '+request+(lastTurn?' '+lastTurn:'')+(sideChat?' --side-chat '+Buffer.from(sideInstructions).toString('base64'):'')));
       if(fork.source!==thread||!uuid.test(fork.thread)||fork.thread===thread)return json(409,{error:fork.error?.message||'主机尚未确认分支'});
       directoryChanged();return json(200,fork)
     }
@@ -1620,8 +1672,8 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(!validImages(images))return json(400,{error:'仅支持总计 256 KiB 以内的 PNG、JPEG 和 WebP 图片'});
       if(!uuid.test(id)||typeof prompt!=='string'||(!prompt.trim()&&!images.length)||Buffer.byteLength(prompt)>16000)return json(400,{error:'请输入不超过 16 KB 的消息'});
       await requireReceiverIdentity();
-      if((collaborationMode==='plan'||serviceTier!=null)&&deviceId&&(await openRemote()).nativeCall)
-        return json(400,{error:'当前主机连接仅支持普通聊天，并沿用主机速度'});
+      if(collaborationMode==='plan'&&deviceId&&(await openRemote()).nativeCall)
+        return json(400,{error:'当前主机连接仅支持普通聊天'});
       let previous=null,project=cwd;
       if(expectedThread!=null&&!uuid.test(expectedThread)||parent&&!uuid.test(parent))return json(400,{error:'无效会话'});
       if(parent||expectedThread){
@@ -1644,7 +1696,9 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         if(projectId&&!knownProjectIds.has(projectId))return json(400,{error:'请重新从主机加载项目'})
       }
       if(model||effort||serviceTier!=null){
-        const selected=(await models(project||'')).models.find(m=>m.id===model);
+        const catalog=await models(project||'');
+        if(serviceTier!=null&&catalog.canSetServiceTier===false)return json(400,{error:'当前主机的 Remote 插件只支持沿用主机速度'});
+        const selected=catalog.models.find(m=>m.id===model);
         if(!selected||effort&&!selected.efforts.includes(effort))return json(400,{error:'所选模型或推理强度不在主机目录中'})
         if(serviceTier!=null&&serviceTier!=='default'&&!selected.serviceTiers?.some(t=>t.id===serviceTier))return json(400,{error:'该模型不支持所选服务档位'})
       }
@@ -1679,6 +1733,11 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     json(404,{error:'未找到'})
   }catch(e){
+    if(req.url?.startsWith('/api/web-preview/')){
+      if(e.code==='LOOPBACK_PORT_DENIED')return json(403,{code:e.code,error:'请在主机的 Remote 设置中允许此预览端口并保存'});
+      if(['FEATURE_NOT_SUPPORTED','METHOD_NOT_FOUND','METHOD_NOT_ALLOWED'].includes(e.code))return json(501,{code:e.code,error:'当前主机未提供网页预览'});
+      if(e.code==='RATE_LIMITED')return json(429,{code:e.code,error:'主机网页预览已达到连接上限'})
+    }
     const diagnostic=deviceId&&req.method==='POST'&&req.url==='/api/connection'?getLastDisconnect?.():null;
     if(e.code==='REMOTE_NOT_PAIRED'&&process.env.CODEX_RECEIVER_UI==='android')
       return json(503,{code:e.code,error:'完成应用内的 Remote 设备授权后，即可选择主机。'});
@@ -1686,6 +1745,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     if(req.method==='POST'&&req.url==='/api/devices')return json(503,deviceDirectoryError(e));
     if(/TRANSPORT|CONNECT|TIMEOUT|fetch failed|Control socket|timed out/i.test([e.code,e.message,e.cause?.code].join(' ')))
       return json(503,{error:'ds-harness-remote 连接未就绪，请重试',...(diagnostic?{lastDisconnect:diagnostic}:{})});
+    if(req.url==='/api/account-usage')return json(503,{error:'当前主机未返回账号用量，可稍后刷新'});
     json(400,{error:e.code==='ENOENT'?'无法找到这轮对话':'请求处理失败'})
   }
 }

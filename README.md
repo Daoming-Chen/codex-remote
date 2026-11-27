@@ -12,7 +12,18 @@ npm ci --prefix web/vendor
 npm run build
 ```
 
-Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打开 Remote 授权页和本机工作台。默认地址为 `http://127.0.0.1:47831/`。从设备列表选择在线主机，之后可在连接信息里切换设备。浏览器草稿和接收服务的任务记录按设备 ID 隔离。主机需已安装并授权可用的 ds-harness-remote 和 Codex。详细步骤见 [使用说明](web/使用说明.txt)。
+Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打开 Remote 授权页和本机工作台。默认地址为 `http://127.0.0.1:47831/`。从设备列表选择在线主机，之后可点击最左下角的主机缩写切换设备。浏览器草稿和接收服务的任务记录按设备 ID 隔离。主机需已安装并授权可用的 ds-harness-remote 和 Codex。详细步骤见 [使用说明](web/使用说明.txt)。
+
+## 在平板上查看主机项目
+
+选择主机和项目后，在新聊天顶部点「切换侧面板」，或在已有聊天顶部点「显示标签页」。在「新标签页」的「搜索文件或输入 URL」中输入文件名或开发服务地址即可打开结果。点面板里的加号还可以选择以下工具。
+
+- 选择「文件资源管理器」可以展开项目目录、读取工作树中的文本文件。点击回复中的项目文件链接可定位到相应文件和行。
+- 选择「浏览器」可以打开主机上的开发服务。先在主机的 ds-harness-remote 设置中允许服务端口，再选择该端口或输入带路径的地址，例如 `http://localhost:5173/app/`。这里的 `localhost` 指所选主机。聊天回复中的本地网页链接也可以直接打开预览。
+
+Android 返回前台或切换网络时会检查所选主机的连接。工作台显示「正在等待」时会自动重试，也可以点「立即重试」。恢复后，工作台按原任务标识继续接收回复。
+
+Android 选定主机后默认开启「后台保持连接」，通过系统前台服务检查并恢复连接。可在「当前连接」中关闭，也可以在允许通知后从系统通知中停止。升级时保留此前手动设置的开关状态。
 
 ## 仓库结构
 
@@ -33,7 +44,30 @@ Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打�
 
 修改 `apps/`、`packages/` 或 `android/src/` 中的源码后运行 `npm run build`。构建使用 TypeScript、esbuild 和 Preact，将页面依赖打进本地资源，运行时无需前端 CDN。设备选择页、首页标题、模型命令搜索框、推理强度滑块、速度菜单和附件栏由 Preact 渲染。聊天流式更新、模型菜单和语音流程仍保留命令式实现。
 
-`npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、听写控制器、录音处理器、离线恢复页、构建脚本和浏览器测试。其余迁入 TypeScript 的控制器在构建时去除类型并检查生成脚本的语法。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览、草稿恢复，以及流式回复期间切换设备再返回的行为；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
+`npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、听写控制器、录音处理器、离线恢复页、构建脚本和浏览器测试。esbuild 将工作台浏览器脚本编译为 Chromium 83 支持的语法。Android 11 模拟器的 WebView 83 已使用模拟主机验证选择设备、打开聊天、收发消息和回到前台后重新连接。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览、草稿恢复，以及流式回复期间切换设备再返回的行为；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
+
+## 在原生主机上选择模型速度
+
+在模型与推理强度菜单里点闪电图标，选择当前模型提供的 Fast 或 Ultrafast。接收端会记住当前聊天的选择，并在每次发送时传给主机。「标准」使用标准速度，「沿用主机设置」使用主机上的会话配置。
+
+通过 Codex 原生接口连接的主机需要支持 `turn/start.serviceTierForTurn`。原版 ds-harness-remote 0.6.8 能列出模型速度，但其接口会拒绝逐轮指定速度。连接这类主机时，速度菜单会标明只能沿用主机设置。
+
+仓库提供 0.6.8 的主机插件兼容补丁。下列 PowerShell 命令在仓库根目录运行，使用本机已安装的插件生成独立 npm 包。构建需要 Python 3、Git 和 npm。
+
+```powershell
+$plugin = Join-Path $env:USERPROFILE '.dsh/profiles/desktop/node_modules/ds-harness-remote'
+python scripts/host-compat/package_plugin.py $plugin dist/ds-harness-remote-0.6.8-codex-speed.tgz
+```
+
+构建脚本只在临时副本中应用补丁。要让 Windows 主机使用兼容包，等主机当前任务结束后完全退出 DeepSeek Harness，再通过其自带的 `dsh.cmd` 安装到 `desktop` 配置。安装完成后重新打开 DeepSeek Harness。
+
+```powershell
+$dsh = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
+$package = (Resolve-Path 'dist/ds-harness-remote-0.6.8-codex-speed.tgz').Path
+& $dsh plugin --profile desktop add -w $package
+```
+
+已用本机 `dsh.cmd` 将生成的 tarball 安装到隔离的 `web` 配置，并核对安装后的插件入口与通过实测的副本一致。该副本已连接本机 Codex App Server，使用 GPT-6.2 Sol 以 Fast 和 Ultrafast 各完成一轮。运行中主机的插件替换和重启尚未实测。
 
 ## 构建 Web 包
 
@@ -66,4 +100,8 @@ python3 tests/android_package.py
 
 ## 验证范围
 
-Windows 接收端已在两台授权主机上分别收发并切回原聊天，也已验证图片压缩后的双图识别。Linux 接收端在 WSL2 用双设备夹具验证切换。Android 已做模拟器交互和测试包检查。实体平板、豆包小语音面板直连、完整桌面交互一致性仍待验证。
+Windows 接收端已在两台授权主机上分别收发、切回原聊天并探测连接。从 Windows 原生主机展开项目目录后，读取的工作树文本与本机文件一致。Linux 接收端在 WSL2 用双设备夹具验证了切换。
+
+Android 14 模拟器已验证返回前台、进程重开、切网后的恢复，以及后台连接通知的开启与停止。使用模拟主机链路验证了草稿恢复、侧面板加载网页、相对资源和 WebSocket、关闭预览释放连接，以及在 WebView 113 上触摸选择速度档位。Android 11 模拟器的 WebView 83 已验证选机、进入聊天、模拟收发和返回前台恢复。
+
+OPPO 平板真机已验证跨网主机的消息收发、流式回复、远程项目选择、工作树文件读取，以及切换主机后的草稿与在途回复隔离。划掉最近任务后，系统可能冻结进程，重新打开时仍可能触发 Remote 握手。真实主机网页到平板的预览、豆包小语音面板直连及完整桌面交互一致性仍待验证。
