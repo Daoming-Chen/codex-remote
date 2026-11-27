@@ -1002,18 +1002,22 @@ function mountSideChat(container,owner,chat){
   let renderedFiles;
   form.append(attachments,field,send);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   let last='';
+  let displayedImages=[];
   function sync(){
     if(!container.isConnected)return;
-    const rows=chat.messages.filter(m=>m.text).map(m=>[m.role,m.text]);
-    if(chat.pending&&chat.preview)rows.push(['assistant',chat.preview]);
+    const rows=chat.messages.filter(m=>m.text||m.images?.length);
+    if(chat.pending&&chat.preview)rows.push({role:'assistant',text:chat.preview});
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
-    const content=JSON.stringify(rows);
-    if(content!==last){
+    const content=JSON.stringify(rows.map(m=>[m.role,m.text]));
+    if(content!==last||rows.some((m,i)=>m.images!==displayedImages[i])){
       const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
-      last=content;transcript.replaceChildren();
-      for(const [role,text] of rows){
+      last=content;displayedImages=rows.map(m=>m.images);transcript.replaceChildren();
+      for(const {role,text,images} of rows){
         const message=element('div',role==='user'?'side-question':'markdown');
-        if(role==='user')message.textContent=text;else message.innerHTML=window.renderMarkdown(text);
+        if(role==='user'){
+          message.textContent=text||'';
+          for(const url of images||[])message.append(attachmentImage(url))
+        }else message.innerHTML=window.renderMarkdown(text);
         transcript.append(message)
       }
       if(atEnd)transcript.scrollTop=transcript.scrollHeight

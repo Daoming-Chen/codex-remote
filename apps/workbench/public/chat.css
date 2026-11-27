@@ -134,7 +134,7 @@ dialog.model-menu::backdrop{background:transparent}
 #attachment .chip { max-width: calc(100% - 20px); }
 #attachment .chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #attachment .chip > :is(svg,button) { flex-shrink: 0; }
-.user-msg .attachment-image{display:block;max-width:min(100%,340px);max-height:250px;object-fit:contain;margin:.4em 0;border-radius:8px}
+.user-msg .attachment-image,.side-question .attachment-image{display:block;max-width:min(100%,340px);max-height:250px;object-fit:contain;margin:.4em 0;border-radius:8px}
 #window-nav{display:none}
 @media(min-width:801px){
   #window-nav{display:flex;align-items:center;gap:2px;height:36px;padding:0 6px;background:var(--side);color:var(--muted)}
