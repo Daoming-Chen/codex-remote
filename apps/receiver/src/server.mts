@@ -574,6 +574,9 @@ async function openHistory(mode,thread){
   return {...await flight}
 }
 let directoryFlight,hasLoadedDirectory=false;
+async function ensureProjectDirectory(){
+  if(!hasLoadedDirectory)await firstDirectoryPage()
+}
 async function firstDirectoryPage(){
   if(!directoryFlight){
     const flight=remoteThreads('list','-').finally(()=>{if(directoryFlight===flight)directoryFlight=null});
@@ -1302,6 +1305,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       for await(const part of req){size+=part.length;if(size>16384)return json(413,{error:'路径过长'});parts.push(part)}
       const {root,path,thread,workspace=root,workingTree=false}=JSON.parse(Buffer.concat(parts));
       if(typeof root!=='string'||typeof path!=='string')return json(400,{error:'路径无效'});
+      await ensureProjectDirectory();
       if([...nativeRoots.values()].some(roots=>roots.includes(root))){
         const paths=/^(?:[a-z]:|\\\\)/i.test(root)?win32:posix;
         const relative=paths.relative(root,path);
@@ -1327,6 +1331,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const chunks=[];let size=0;
       for await(const chunk of req){size+=chunk.length;if(size>16384)return json(413,{error:'路径过长'});chunks.push(chunk)}
       const {root,relative,thread,workspace=root}=JSON.parse(Buffer.concat(chunks));
+      await ensureProjectDirectory();
       const nativeRoot=[...nativeRoots.values()].some(roots=>roots.includes(root));
       if(!nativeRoot&&!fileSearchRoots.has(root))return json(400,{error:'请先加载当前主机的项目目录'});
       const paths=/^(?:[a-z]:|\\\\)/i.test(root)?win32:posix;
@@ -1357,6 +1362,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const parts=[];let size=0;for await(const part of req){size+=part.length;if(size>2048)return json(413,{error:'查询过长'});parts.push(part)}
       const {root,query}=JSON.parse(Buffer.concat(parts));
+      await ensureProjectDirectory();
       if(!fileSearchRoots.has(root))return json(400,{error:'请先加载主机项目目录'});
       if(typeof query!=='string'||!query.trim()||query.length>180)return json(400,{error:'请输入文件名'});
       return json(200,await remoteThreads('project-files',JSON.stringify({root,query:query.trim()})))
@@ -1379,7 +1385,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     if(req.method==='POST' && req.url?.split('?')[0]==='/api/models'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const cwd=new URL(req.url,origin).searchParams.get('cwd')||'';
-      if(cwd&&!allowedProjects.has(cwd)&&!hasLoadedDirectory)await firstDirectoryPage();
+      if(cwd&&!allowedProjects.has(cwd))await ensureProjectDirectory();
       if(cwd&&!allowedProjects.has(cwd))return json(400,{error:'未知主机项目'});
       return json(200,await models(cwd))
     }
