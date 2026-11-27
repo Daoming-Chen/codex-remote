@@ -1,5 +1,5 @@
 from pathlib import Path
-import os,zipfile,subprocess,shutil,sys
+import os,zipfile,subprocess,shutil,sys,tempfile
 a=Path(__file__).resolve().parent
 root=a.parent
 out_dir=root/'dist'
@@ -61,7 +61,9 @@ run(tool(bt,'d8','.bat'),'--lib',jar,'--min-api','26','--output',build,build/'cl
 raw=build/'unsigned.apk'
 resources=build/'resources.zip'
 run(tool(bt,'aapt2'),'compile','--dir',a/'res','-o',resources)
-run(tool(bt,'aapt2'),'link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',a/'assets','-o',raw,resources)
+with tempfile.TemporaryDirectory(dir=build) as staging:
+ shutil.copyfile(assets_dir/'receiver.zip',Path(staging)/'receiver.zip')
+ run(tool(bt,'aapt2'),'link','-I',jar,'--manifest',a/'AndroidManifest.xml','-A',staging,'-o',raw,resources)
 with zipfile.ZipFile(raw,'a',zipfile.ZIP_DEFLATED) as apk:
  apk.write(build/'classes.dex','classes.dex')
  for abi in ['arm64-v8a','x86_64']:

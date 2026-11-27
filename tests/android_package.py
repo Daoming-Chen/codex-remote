@@ -2,11 +2,15 @@ import hashlib,io,json,os,zipfile,tempfile,subprocess,pathlib,urllib.request,url
 root=pathlib.Path(__file__).resolve().parents[1]
 with zipfile.ZipFile(root/'dist/Codex-Remote-Android-test.apk') as apk:
  assert apk.testzip() is None
+ assert [n for n in apk.namelist() if n.startswith('assets/')] == ['assets/receiver.zip']
  assert all(f'lib/{abi}/{lib}.so' in apk.namelist() for abi in ('arm64-v8a','x86_64') for lib in ('libnode','libc++_shared','libreceiver'))
  with tempfile.TemporaryDirectory() as temp:
   d=pathlib.Path(temp);app=d/'app';app.mkdir()
   with zipfile.ZipFile(io.BytesIO(apk.read('assets/receiver.zip'))) as assets:
-   assert not any(n.startswith('state/') or n.endswith('credentials.json') for n in assets.namelist())
+   private_names={'identity','state','device.json','device.key','trusted-peers.json','launch.json','screen.json'}
+   for name in assets.namelist():
+    parts=pathlib.PurePosixPath(name.lower()).parts
+    assert not private_names.intersection(parts) and not name.lower().endswith('credentials.json'),name
    assets.extractall(app)
   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
   (d/'launch.json').write_text(json.dumps({'port':port,'token':'isolated-cookie'}))
