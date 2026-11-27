@@ -698,6 +698,16 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert(gap>=0&&gap<40,'side chat send button stays at the bottom of the resized panel');
     await page.setViewportSize({width:820,height:900});
     await sideDraft.fill('侧边草稿');
+    await page.keyboard.press('Alt+l');
+    assert(await page.locator('#prompt').evaluate(field=>document.activeElement===field));
+    assert.equal(await sideDraft.inputValue(),'侧边草稿');
+    const tabCount=await page.locator('#work-tabs .work-tab').count();
+    await page.locator('#work-hide').tap();
+    await page.keyboard.press('Control+k');
+    await page.getByRole('dialog').getByRole('button',{name:'聚焦侧边聊天',exact:true}).tap();
+    assert.equal(await page.locator('#work-tabs .work-tab').count(),tabCount);
+    assert.equal(await sideDraft.inputValue(),'侧边草稿');
+    assert(await sideDraft.evaluate(field=>document.activeElement===field));
     await page.keyboard.press('Control+Alt+s');
     assert.equal(await sideDraft.inputValue(),'');
     assert.equal(await page.locator('#work-tabs .work-tab').count(),2);

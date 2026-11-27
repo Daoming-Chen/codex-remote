@@ -3279,6 +3279,13 @@ function sidebarNeighbor(delta){
   rows[index]?.querySelector('button')?.click()
 }
 const commandMenuKeys=['k','shift+p'];
+function openSideChatForFocus(){
+  const chat=current(),view=chat.workView;
+  if(!view?.ids.length)return;
+  const records=attachedSideChats(chat).map(sideRecord);
+  return records.find(record=>record.id===view.active&&view.ids.includes(record.id))||
+    view.ids.map(id=>records.find(record=>record.id===id)).find(Boolean)
+}
 const commands=[
   {name:'键盘快捷键',icon:'sliders-horizontal',keys:['/'],run:keyboardShortcuts},
   {name:'在当前聊天中查找',icon:'search',keys:['f'],run:openThreadFind},
@@ -3291,7 +3298,15 @@ const commands=[
   }},
   {name:'新聊天',icon:'square-pen',keys:['n','shift+o'],run:start},
   {name:'搜索聊天',icon:'search',keys:[],run:search},
+  {name:'聚焦主聊天输入框',icon:'message-circle',keys:navigator.platform.startsWith('Mac')?[]:['alt+l'],primary:false,run:()=>{
+    if(mobile.matches&&!$('workbench').hidden)$('work-hide').click();
+    $('prompt').focus()
+  }},
   {name:'打开侧边聊天',icon:'message-circle',keys:['alt+s'],available:()=>!!current().thread&&!current().archived,run:()=>openRecord(sideChatTab)},
+  {name:'聚焦侧边聊天',icon:'message-circle',keys:[],available:()=>!!openSideChatForFocus(),run:()=>{
+    const record=openSideChatForFocus();
+    if(record){openRecord(record);document.querySelector('.side-chat textarea')?.focus()}
+  }},
   {name:'切换侧面板',icon:'panel-left',keys:['alt+b'],run:toggleWorkPanel},
   {name:'切换项目侧栏',icon:'panel-left',keys:['b','shift+s'],run:()=>action('sidebar')},
   {name:'后退',icon:'chevron-down',keys:['['],run:()=>$('chat-back').click()},
@@ -3300,8 +3315,8 @@ const commands=[
   {name:'下一个侧栏对话',icon:'message-circle',keys:['alt+]','alt+arrowright'],run:()=>sidebarNeighbor(1)},
   {name:'重命名聊天',icon:'square-pen',keys:['alt+r'],run:()=>renameChat(current())}
 ];
-function shortcutLabel(key){
-  const prefix=navigator.platform.startsWith('Mac')?'⌘':'Ctrl+';
+function shortcutLabel(key,primary=true){
+  const prefix=primary?(navigator.platform.startsWith('Mac')?'⌘':'Ctrl+'):'';
   return prefix+key.split('+').map(part=>part[0].toUpperCase()+part.slice(1)).join('+')
 }
 function keyboardShortcuts(restore=false){
@@ -3317,8 +3332,8 @@ function keyboardShortcuts(restore=false){
     list.replaceChildren();
     const query=field.value.trim().toLowerCase().replaceAll(' ','');
     for(const entry of entries){
-      const labels=entry.keys.map(shortcutLabel);
-      if(captureMode?captured!==null&&!entry.keys.includes(captured):
+      const labels=entry.keys.map(key=>shortcutLabel(key,entry.primary!==false));
+      if(captureMode?captured!==null&&!labels.includes(captured):
         ![entry.name,...labels].some(text=>text.toLowerCase().includes(query)))continue;
       const values=element('dd');
       for(const label of labels)values.append(element('kbd','',label));
@@ -3341,8 +3356,8 @@ function keyboardShortcuts(restore=false){
     if(e.repeat||['Control','Meta','Alt','Shift','AltGraph'].includes(e.key))return;
     const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
     const primary=navigator.platform.startsWith('Mac')?e.metaKey:e.ctrlKey;
-    captured=primary?key:'';
-    field.value=primary?shortcutLabel(key):key;
+    captured=shortcutLabel(key,primary);
+    field.value=captured;
     render()
   };
   setCapture(false);toolbar.append(field,capture);body.append(toolbar,list,empty);
@@ -3435,7 +3450,7 @@ function commandMenu(){
     results.replaceChildren();
     for(const cmd of commands.filter(c=>(!c.available||c.available())&&c.name.includes(field.value.trim()))){
       const shortcut=cmd.keys[0];
-      results.append(row(cmd.name,cmd.icon,()=>{closeDialog();cmd.run()},shortcut?shortcutLabel(shortcut):''))
+      results.append(row(cmd.name,cmd.icon,()=>{closeDialog();cmd.run()},shortcut?shortcutLabel(shortcut,cmd.primary!==false):''))
     }
     if(!results.children.length)results.append(element('p','quiet','没有匹配的命令'))
   }
@@ -3509,12 +3524,14 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&!e.defaultPrevented&&!$('dialog').open&&$('layout').classList.contains('drawer')){
     e.preventDefault();toggleSidebar();return
   }
-  if(e.defaultPrevented||isCompositionKey(e)||e.getModifierState('AltGraph')||!(e.ctrlKey||e.metaKey))return;
+  if(e.defaultPrevented||isCompositionKey(e)||e.getModifierState('AltGraph'))return;
+  const primary=e.ctrlKey||e.metaKey;
+  if(!primary&&!e.altKey)return;
   const letter=e.altKey&&e.code==='KeyS'?'s':e.key.toLowerCase();
   const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+letter;
-  if(commandMenuKeys.includes(key)){e.preventDefault();if(!e.repeat)commandMenu();return}
+  if(primary&&commandMenuKeys.includes(key)){e.preventDefault();if(!e.repeat)commandMenu();return}
   if($('dialog').open)return;
-  const command=commands.find(cmd=>cmd.keys.includes(key)&&(!cmd.available||cmd.available()));
+  const command=commands.find(cmd=>(cmd.primary!==false)===primary&&cmd.keys.includes(key)&&(!cmd.available||cmd.available()));
   if(command){e.preventDefault();if(!e.repeat||key.startsWith('alt+arrow'))command.run()}
 });
 $('file').onchange=async()=>{
