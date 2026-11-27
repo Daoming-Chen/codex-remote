@@ -1035,43 +1035,52 @@ function mountSideChat(container,owner,chat){
   actions.append(attach,send);
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
-  let last='';
-  let displayedImages=[];
+  const entries=[];
   function sync(){
     if(!container.isConnected)return;
     const ordered=chat.pending&&orderedSnapshots.get(chat);
     const rows=(ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)
       .filter(m=>m.text||m.images?.length||m.role==='steps');
-    if(!ordered?.length&&chat.pending&&chat.preview)rows.push({role:'assistant',text:chat.preview});
+    if(!ordered?.length&&chat.pending&&chat.preview)rows.push({role:'assistant',turn:chat.turn,text:chat.preview});
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
     const stored=new Set(chat.messages);
     for(const row of ordered||[])stored.delete(row);
     const canCopy=row=>!!row.text&&(row.role==='user'||(row.role==='assistant'&&stored.has(row)));
-    const content=JSON.stringify(rows.map(m=>[m.role,m.text,m.explanation,m.steps,canCopy(m)]));
-    if(content!==last||rows.some((m,i)=>m.images!==displayedImages[i])){
-      const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
-      last=content;displayedImages=rows.map(m=>m.images);transcript.replaceChildren();
-      for(const row of rows){
-        const {role,text,images}=row;
-        if(role==='steps'||role==='plan'){transcript.append(planCard(row));continue}
-        const message=element('div',role==='user'?'side-question':'answer');
-        if(role==='user'){
-          message.textContent=text||'';
-          for(const url of images||[])message.append(attachmentImage(url))
-        }else{
-          message.dataset.turn=row.turn||'';
-          if(!messageWrap.has(row))messageWrap.set(row,new Set());
-          renderAnswer(message,text,messageWrap.get(row))
-        }
-        transcript.append(message);
-        if(canCopy(row)){
-          const actions=element('div',role==='user'?'actions user-actions':'actions');
-          actions.append(copyButton(role==='user'?'复制消息':'复制回复',()=>text));
-          transcript.append(actions)
-        }
+    const atEnd=transcript.scrollHeight-transcript.scrollTop-transcript.clientHeight<36;
+    for(const [index,row] of rows.entries()){
+      const {role,text,images}=row;
+      const key=JSON.stringify([role,row.turn,row.id||row.submissionId]);
+      let entry=entries[index];
+      if(entry?.key!==key){
+        for(const obsolete of entries.splice(index)){obsolete.message.remove();obsolete.actions?.remove()}
+        entry={key,message:element('div',role==='user'?'side-question':'answer'),wrapped:new Set()};
+        entries.push(entry);transcript.append(entry.message)
       }
-      if(atEnd)transcript.scrollTop=transcript.scrollHeight
+      if(role==='steps'||role==='plan'){
+        const plan=JSON.stringify([text,row.steps,row.explanation]);
+        if(entry.plan!==plan){
+          const card=planCard(row);entry.message.replaceWith(card);entry.message=card;entry.plan=plan
+        }
+        continue
+      }
+      if(entry.text!==text||entry.images!==images){
+        if(role==='user'){
+          entry.message.textContent=text||'';
+          for(const url of images||[])entry.message.append(attachmentImage(url))
+        }else{
+          entry.message.dataset.turn=row.turn||'';
+          renderLiveAnswer(entry.message,text,entry.wrapped)
+        }
+        entry.text=text;entry.images=images
+      }
+      if(canCopy(row)&&!entry.actions){
+        entry.actions=element('div',role==='user'?'actions user-actions':'actions');
+        entry.actions.append(copyButton(role==='user'?'复制消息':'复制回复',()=>entry.text));
+        entry.message.after(entry.actions)
+      }else if(!canCopy(row)&&entry.actions){entry.actions.remove();entry.actions=null}
     }
+    for(const obsolete of entries.splice(rows.length)){obsolete.message.remove();obsolete.actions?.remove()}
+    if(atEnd)transcript.scrollTop=transcript.scrollHeight;
     if(field.value!==chat.draft){field.value=chat.draft;fitEditor(field)}
     if(renderedFiles!==chat.files){
       renderedFiles=chat.files;

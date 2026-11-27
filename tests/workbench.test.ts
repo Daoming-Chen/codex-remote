@@ -643,6 +643,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     let allowedPorts:number[]=[];
     const childThread='00000000-0000-4000-8000-000000000012';
     let sideJob='',sideComplete=false,sideSubmissions=0;
+    let progressText='侧边处理中\n\n```ts\nlet value = 1;\n```';
     const sideReply='侧边回复\n\n```ts\nconst count = 1;\n```\n\n[查看项目文件](src/note.txt#L2)';
     await page.addInitScript(({scope,root,thread,project,messages})=>{
       const chat={id:thread,thread,cwd:root,projectId:project.id,messages,draft:'保留草稿',files:[],title:'已有聊天',updated:Date.now()};
@@ -680,7 +681,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       }
       if(sideJob&&path.startsWith(base+'/api/turn/'+sideJob)){
         const snapshot={id:sideJob,status:sideComplete?'done':'running',thread:childThread,turn:'side-turn',
-          progress:{message:'侧边处理中'},answer:sideComplete?sideReply:''};
+          progress:{message:progressText},answer:sideComplete?sideReply:''};
         return path.endsWith('/events')
           ? route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'})
           : route.fulfill({json:snapshot});
@@ -807,6 +808,18 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
     await page.locator('.side-chat-history').getByText('侧边处理中',{exact:true}).waitFor();
+    const liveSide=page.locator('.side-chat-history');
+    await liveSide.getByRole('button',{name:'换行'}).tap();
+    const originalCode=await liveSide.locator('pre code').elementHandle();
+    const selectedCode=await originalCode!.evaluate(code=>{
+      const range=document.createRange();range.selectNodeContents(code.firstChild!);
+      const selection=window.getSelection()!;selection.removeAllRanges();selection.addRange(range);return selection.toString()
+    });
+    progressText+='\n\n后续段落';
+    await liveSide.getByText('后续段落',{exact:true}).waitFor();
+    assert(await originalCode!.evaluate(code=>code.isConnected&&code.parentElement?.classList.contains('wrapped')));
+    assert.equal(selectedCode.trim(),'let value = 1;');
+    assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),selectedCode);
     await page.locator('.work-tab-wrap').filter({has:page.locator('.work-tab[aria-pressed="true"]')}).getByRole('button',{name:/^关闭 /}).tap();
     await page.locator('#work-hide').tap();
     await page.reload();
