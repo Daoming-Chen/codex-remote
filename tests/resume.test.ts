@@ -31,7 +31,8 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     const start='行内 $x^2$ 和 \\(a_i\\)。\n\n$$\n\\frac{1}{';
     const answer=start+'2}\n$$\n\n\\[\\sqrt{x}\\]\n\n`$code$`，价格 $5 和 $10。\n\n```math\nx^3\n```';
     const longEquation=Array.from({length:80},(_,i)=>'x_{'+i+'}').join('+')+'=z';
-    const text=answer+'\n\n$$\n'+longEquation+'\n$$\n\n```math\n\\frac{1}{';
+    const mixed=String.raw`结论：\[a^2+b^2=c^2\]，以及 $$E=mc^2$$。`;
+    const text=answer+'\n\n'+mixed+'\n\n$$\n'+longEquation+'\n$$\n\n```math\n\\frac{1}{';
     let complete=false;
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     await page.route(origin+'/**',route=>{
@@ -51,7 +52,7 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     assert.equal(await messages.locator('.katex-error').count(),0);
     complete=true;
     await messages.locator('.answer .katex-error').waitFor();
-    assert.equal(await messages.locator('.katex').count(),6);
+    assert.equal(await messages.locator('.katex').count(),8);
     assert.equal(await messages.locator('.katex-display').count(),4);
     assert.equal(await messages.locator('code').innerText(),'$code$');
     assert.match(await messages.innerText(),/价格 \$5 和 \$10/);

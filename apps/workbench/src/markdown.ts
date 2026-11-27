@@ -26,6 +26,26 @@ markdown.use(tex, {
   },
 });
 
+// The block rules handle standalone equations. Codex also accepts these
+// delimiters inside a paragraph, where the expression uses inline math.
+const bracketEquation = /\\\[((?:[^\\\n]|\\(?!\])[^\n])+)\\\]/y;
+const dollarEquation = /\$\$(?!\$)((?:[^$\\\n]|\\[^\n]|\$(?!\$))+)\$\$(?!\$)/y;
+markdown.inline.ruler.before('escape', 'codex_inline_equation', (state, silent) => {
+  const opening = state.src.slice(state.pos, state.pos + 2);
+  const rule = opening === '\\[' ? bracketEquation : opening === '$$' ? dollarEquation : null;
+  if (!rule || (opening === '$$' && state.src[state.pos - 1] === '$')) return false;
+  rule.lastIndex = state.pos;
+  const match = rule.exec(state.src);
+  if (!match || rule.lastIndex > state.posMax) return false;
+  if (!silent) {
+    const token = state.push('math_inline', 'math', 0);
+    token.markup = opening;
+    token.content = match[1];
+  }
+  state.pos = rule.lastIndex;
+  return true;
+});
+
 window.renderMarkdown = text => markdown.render(text);
 window.renderMarkdownBlocks = (text, streaming = true) => {
   const environment = {streaming};
