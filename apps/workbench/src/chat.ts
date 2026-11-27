@@ -1019,6 +1019,7 @@ function mountSideChat(container,owner,chat){
     }
   };
   transcript.setAttribute('aria-label','侧边聊天记录');status.setAttribute('role','status');
+  transcript.addEventListener('click',event=>handleAnswerLink(event,chat,owner));
   const questions=element('div','side-chat-questions');
   const attachments=element('div','side-attachments');
   let renderedFiles;
@@ -1053,11 +1054,15 @@ function mountSideChat(container,owner,chat){
       for(const row of rows){
         const {role,text,images}=row;
         if(role==='steps'||role==='plan'){transcript.append(planCard(row));continue}
-        const message=element('div',role==='user'?'side-question':'markdown');
+        const message=element('div',role==='user'?'side-question':'answer');
         if(role==='user'){
           message.textContent=text||'';
           for(const url of images||[])message.append(attachmentImage(url))
-        }else message.innerHTML=window.renderMarkdown(text);
+        }else{
+          message.dataset.turn=row.turn||'';
+          if(!messageWrap.has(row))messageWrap.set(row,new Set());
+          renderAnswer(message,text,messageWrap.get(row))
+        }
         transcript.append(message);
         if(canCopy(row)){
           const actions=element('div',role==='user'?'actions user-actions':'actions');
@@ -1675,11 +1680,12 @@ function chatFileTarget(href){
   const line=suffix?.[1]||/^L([1-9]\d*)(?:-L?[1-9]\d*)?$/.exec(fragment||'')?.[1];
   return {filename,line}
 }
-$('messages').addEventListener('click',event=>{
+$('messages').addEventListener('click',event=>handleAnswerLink(event,current(),current()));
+function handleAnswerLink(event,chat,owner){
   const link=event.target.closest('.answer a,.live-answer a');
   const href=link?.getAttribute('href');
   if(hostBrowserAddress(href)){
-    event.preventDefault();const chat=current();chat.browserAddress=href;
+    event.preventDefault();owner.browserAddress=href;
     $('workbench').querySelector(':scope > .host-browser')?.remove();
     openRecord(browserTab);return
   }
@@ -1688,7 +1694,7 @@ $('messages').addEventListener('click',event=>{
   event.preventDefault();
   const {filename,line}=target;
   let path;
-  const chat=current(),turn=link.closest('.answer,.live-answer').dataset.turn;
+  const turn=link.closest('.answer,.live-answer').dataset.turn;
   try{path=resolveChatFile(decodeURIComponent(filename),chat.cwd)}catch{toast('文件路径编码无效');return}
   const pathKey=name=>/^[a-z]:\//i.test(name)?name.toLowerCase():name;
   const rows=[...chat.messages,...(orderedSnapshots.get(chat)||[])];
@@ -1700,7 +1706,7 @@ $('messages').addEventListener('click',event=>{
   }
   const cwdPrefix=chat.cwd&&resolveChatFile(chat.cwd,chat.cwd).replace(/\/+$/,'')+'/';
   if(cwdPrefix&&pathKey(path).startsWith(pathKey(cwdPrefix))&&path.length>cwdPrefix.length){
-    chat.projectFile={cwd:chat.cwd,path:path.slice(cwdPrefix.length),line:Number(line)||null};
+    owner.projectFile={cwd:chat.cwd,path:path.slice(cwdPrefix.length),line:Number(line)||null};
     $('workbench').querySelector(':scope > .project-files-panel')?.remove();
     openRecord(projectFilesTab);return
   }
@@ -1737,7 +1743,7 @@ $('messages').addEventListener('click',event=>{
     }catch(error){preview.disabled=false;preview.textContent='重新读取主机文件';if(preview.isConnected)toast(error.message)}
   }
 
-});
+}
 function decorateAnswer(body,wrapped,startIndex){
   for(const link of body.querySelectorAll('a')){
     link.rel='noopener noreferrer';link.target='_blank';

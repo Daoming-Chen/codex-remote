@@ -643,6 +643,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     let allowedPorts:number[]=[];
     const childThread='00000000-0000-4000-8000-000000000012';
     let sideJob='',sideComplete=false,sideSubmissions=0;
+    const sideReply='侧边回复\n\n```ts\nconst count = 1;\n```\n\n[查看项目文件](src/note.txt#L2)';
     await page.addInitScript(({scope,root,thread,project,messages})=>{
       const chat={id:thread,thread,cwd:root,projectId:project.id,messages,draft:'保留草稿',files:[],title:'已有聊天',updated:Date.now()};
       localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:chat.id,chats:[chat],hostProjects:[project]}));
@@ -679,7 +680,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       }
       if(sideJob&&path.startsWith(base+'/api/turn/'+sideJob)){
         const snapshot={id:sideJob,status:sideComplete?'done':'running',thread:childThread,turn:'side-turn',
-          progress:{message:'侧边处理中'},answer:sideComplete?'侧边回复':''};
+          progress:{message:'侧边处理中'},answer:sideComplete?sideReply:''};
         return path.endsWith('/events')
           ? route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'})
           : route.fulfill({json:snapshot});
@@ -812,7 +813,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     sideComplete=true;
     await page.waitForFunction(key=>{
       const owner=JSON.parse(localStorage.getItem(key)||'{}');
-      return owner.sideChats?.some((chat:{messages:{text:string}[]})=>chat.messages.some(m=>m.text==='侧边回复'));
+      return owner.sideChats?.some((chat:{messages:{text:string}[]})=>chat.messages.some(m=>m.text?.startsWith('侧边回复')));
     },'receiver:'+scope+':tim-ser-chat-record:'+thread,{timeout:5000});
     await page.locator('#header-summary').tap();
     const unreadTab=page.getByRole('button',{name:'侧边草稿，未读回复',exact:true});
@@ -821,7 +822,12 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin});
     const sideHistory=page.locator('.side-chat-history');
     await sideHistory.getByRole('button',{name:'复制回复',exact:true}).tap();
-    assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'侧边回复');
+    const clipboardText=async()=>(await page.evaluate(()=>navigator.clipboard.readText())).replaceAll('\r\n','\n');
+    assert.equal(await clipboardText(),sideReply);
+    await sideHistory.getByRole('button',{name:'复制代码'}).tap();
+    assert.equal(await clipboardText(),'const count = 1;\n');
+    await sideHistory.getByRole('button',{name:'换行'}).tap();
+    assert(await sideHistory.locator('pre.wrapped').isVisible());
     await sideHistory.getByRole('button',{name:'复制消息',exact:true}).tap();
     assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'侧边草稿');
     assert.equal(await unreadTab.count(),0);
@@ -843,6 +849,11 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await sideDraft.fill('保留侧聊草稿');
     publishRename();
     await activeTab.getByText('主机上的新标题',{exact:true}).waitFor();
+    assert.equal(await sideDraft.inputValue(),'保留侧聊草稿');
+    await sideHistory.getByRole('link',{name:'查看项目文件'}).tap();
+    await page.locator('.project-explorer-reader mark').waitFor();
+    assert.equal(readPath,root+'\\src\\note.txt');
+    await page.locator('#work-tabs .work-tab').filter({hasText:'主机上的新标题'}).last().tap();
     assert.equal(await sideDraft.inputValue(),'保留侧聊草稿');
   } finally { await browser.close() }
 });
