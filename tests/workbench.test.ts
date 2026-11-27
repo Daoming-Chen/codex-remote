@@ -397,6 +397,8 @@ test('restore a streaming turn after sending on another device with the same thr
     const jobs = new Map<string, {id: string; done: boolean}>();
     const posts: string[] = [];
     const wrongHost: string[] = [];
+    let publishRename!:()=>void;
+    const renamed=new Promise<void>(resolve=>{publishRename=resolve});
     await page.route(origin + '/**', async route => {
       const path = new URL(route.request().url()).pathname;
       const device = hosts.find(host => path.startsWith('/devices/' + host.scope + '/'));
@@ -406,6 +408,10 @@ test('restore a streaming turn after sending on another device with the same thr
         deviceName: device.name, scope: device.scope, version: '0123456789abcdef', dictationEngine: 'browser',
       })});
       if (api === '/api/native-capability') return route.fulfill({json: {native: false}});
+      if (device?.deviceId==='a'&&api==='/api/directory-events'){
+        await renamed;
+        return route.fulfill({contentType:'text/event-stream',body:'event: device-name\ndata: '+JSON.stringify(device.name)+'\n\n'})
+      }
       if (device && api === '/api/turn') {
         const {id} = route.request().postDataJSON();
         posts.push(device.deviceId);
@@ -428,13 +434,15 @@ test('restore a streaming turn after sending on another device with the same thr
         return route.fulfill({json: snapshot});
       }
       if (api.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: [], ids: []}});
-      const file = path === '/devices' ? 'devices.html' : path.slice(1);
+      const file = path === '/devices' || path === '/' ? 'devices.html' : path.slice(1);
       return route.fulfill({path: fileURLToPath(new URL('../web/' + file, import.meta.url))});
     });
     async function select(index: number) {
-      await page.goto(origin + '/devices');
+      if(page.url()==='about:blank')await page.goto(origin + '/devices');
+      else await page.getByRole('link',{name:/切换设备/}).click();
       const host = hosts[index];
-      await page.locator('#devices button').filter({has: page.getByText(host.deviceId, {exact: true})}).click();
+      const label=hosts.filter(item=>item.name===host.name).length>1?host.deviceId:host.name;
+      await page.locator('#devices button').filter({has: page.getByText(label, {exact: true})}).click();
       await page.waitForURL('**/devices/' + host.scope + '/');
     }
     async function send(message: string) {
@@ -447,7 +455,14 @@ test('restore a streaming turn after sending on another device with the same thr
     await send('第一台的提问');
     await started;
     await messages.getByText('第二段正在输出', {exact: true}).waitFor();
+    await page.locator('#prompt').fill('第一台未发送');
+    hosts[0].name='Studio North';
+    publishRename();
+    const renamedLink=page.getByRole('link',{name:'切换设备，当前为 Studio North'});
+    await renamedLink.waitFor();
+    assert.equal(await renamedLink.textContent(),'SN');
     await select(1);
+    assert.equal(await page.locator('#prompt').inputValue(),'');
     await send('第二台的提问');
     await messages.getByText('b 的最终回复', {exact: true}).waitFor();
     assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台的第一段|第二段正在输出/);
@@ -456,8 +471,12 @@ test('restore a streaming turn after sending on another device with the same thr
     await page.getByText(/前台发送到页面收到首段正文/).waitFor();
     await page.keyboard.press('Escape');
     await select(0);
+    assert.equal(await page.locator('#prompt').inputValue(),'第一台未发送');
     await messages.getByText('第二段正在输出', {exact: true}).waitFor();
-    await page.reload();
+    await page.goto(origin+'/');
+    await page.waitForURL('**/devices/'+hosts[0].scope+'/');
+    assert.equal(await renamedLink.textContent(),'SN');
+    assert.equal(await page.locator('#prompt').inputValue(),'第一台未发送');
     await messages.getByText('第二段正在输出', {exact: true}).waitFor();
     assert.equal(await messages.getByText('第一台的第一段', {exact: true}).count(), 1);
     jobs.get('a')!.done = true;
