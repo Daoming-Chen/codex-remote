@@ -1127,7 +1127,37 @@ function mountSideChat(container,owner,chat){
     send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
   }
   pendingQuestions(chat,questions);
-  visibleSideChat={chat,sync,questions,form};sync();
+  let readingHistory=false,refreshAgain=false;
+  async function refreshHistory(){
+    if(chat.pending||!chat.thread||!owner.thread||!form.isConnected||!form.getClientRects().length||document.hidden)return;
+    if(readingHistory){refreshAgain=true;return}
+    const thread=chat.thread,parent=chat.parent,updated=chat.updated;
+    readingHistory=true;
+    try{
+      const signal=AbortSignal.timeout(30000);
+      const [source,branch]=await Promise.all([owner.thread,thread].map(id=>threadApi({thread:id,shared:true},signal)));
+      if(!form.isConnected||chat.thread!==thread||chat.pending||chat.parent!==parent||chat.updated!==updated||
+        source.thread!==owner.thread||branch.thread!==thread||!Array.isArray(source.messages)||!Array.isArray(branch.messages))return;
+      const inherited=new Set(source.messages.map(row=>row.turn));
+      const known=new Set(chat.messages.map(row=>row.turn));
+      const history=chat.messages.slice();
+      let after=0;
+      let previousTurn;
+      for(const row of branch.messages){
+        if(!row.turn||inherited.has(row.turn)||branch.activeTurn===row.turn)continue;
+        if(known.has(row.turn)){
+          if(previousTurn!==row.turn)after=history.findLastIndex(local=>local.turn===row.turn)+1
+        }else{
+          history.splice(after++,0,row)
+        }
+        previousTurn=row.turn
+      }
+      if(history.length!==chat.messages.length){chat.messages=history;save();sync()}
+    }catch{/* The cached branch is available while the host is offline. */}
+    finally{readingHistory=false;if(refreshAgain){refreshAgain=false;void refreshHistory()}}
+  }
+  visibleSideChat={chat,sync,questions,form,refreshHistory};sync();
+  void refreshHistory();
   async function prepareThread(){
     if(openingSideThreads.has(chat))return false;
     openingSideThreads.add(chat);chat.error=null;sync();
@@ -4436,6 +4466,7 @@ async function syncArchiveFlags(chats){
 }
 document.addEventListener('visibilitychange',()=>{
   syncThreadWatch();
+  if(!document.hidden)void visibleSideChat?.refreshHistory();
   if(!document.hidden&&current()&&attachedSideChats(current()).some(side=>side.unreadReply))renderWorkbench();
   const c=current();
   if(c?.activeTurn&&!c.pending){
@@ -4511,6 +4542,7 @@ async function recoverWorkbenchConnection(replace=false){
     if(recoveryPending!==probe||document.hidden)return;
     const chat=current();
     if(chat?.thread&&!chat.pending)void refreshCurrentHistory(chat);
+    void visibleSideChat?.refreshHistory();
     void refreshSidebar()
   }catch(error){
     if(recoveryPending!==probe||document.hidden||leavingRevokedDevice)return;

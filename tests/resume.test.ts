@@ -150,6 +150,15 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
         resumed=true;releaseUpdates();
         return route.fulfill({status:202,json:{id:job}})
       }
+      if(stop&&resumed&&path===base+'/api/threads'){
+        const id=route.request().postDataJSON().thread;
+        if(id){
+          const inherited={turn:'parent-turn',role:'user',text:'主聊天上下文'};
+          const messages=id===thread?[inherited,{turn:'original-turn',role:'user',text:'原问题'},
+            {turn:'other-client-turn',role:'assistant',text:'来自另一台设备的回复'}]:[inherited];
+          return route.fulfill({json:{thread:id,messages}})
+        }
+      }
       if(path.startsWith(base+'/api/turn/'+job)){
         if(holdUpdates)await networkRestored;
         const snapshot={id:job,thread,turn:'original-turn',status:resumed?(stop?'interrupted':'done'):'waiting',reconnecting:!resumed,
@@ -183,6 +192,9 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
       await page.reload();
       await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
+      await messages.getByText('来自另一台设备的回复',{exact:true}).waitFor();
+      assert.equal(await messages.getByText('主聊天上下文',{exact:true}).count(),0);
+      assert.equal(await messages.getByText('原问题',{exact:true}).count(),1);
       await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).waitFor()
     }
     if(side){
