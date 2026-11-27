@@ -737,8 +737,8 @@ function archiveComposer(c){
   $('composer').hidden=!!c.archived;$('archive-notice').hidden=!c.archived;
 }
 function questionDraftKey(c,token){return 'codex-question:'+JSON.stringify([c.id,c.pending,c.turn,token])}
-function pendingQuestions(c){
-  const box=$('pending-questions'),requests=c.pending?Object.entries(c.inputRequests||{}):[];
+function pendingQuestions(c,box=$('pending-questions')){
+  const requests=c.pending?Object.entries(c.inputRequests||{}):[];
   const owner=JSON.stringify([c.id,c.pending,c.turn]);
   const key=JSON.stringify([owner,...requests.map(([token])=>token)]);
   if(box.dataset.owner!==owner){box.replaceChildren();box.dataset.owner=owner}
@@ -971,7 +971,7 @@ function createSideChat(owner){
   const list=attachedSideChats(owner);
   const openTabs=owner.workView?.ids||[];
   const sideChatNumber=1+list.filter((side,index)=>openTabs.includes(sideRecord(side,index).id)).length;
-  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId,sideChatNumber});
+  const chat=Object.assign(newChat(),{cwd:owner.cwd,projectId:owner.projectId,sideChatNumber,collaborationMode:owner.collaborationMode||'default'});
   list.push(chat);return sideRecord(chat,list.length-1)
 }
 document.addEventListener('keydown',event=>{
@@ -994,7 +994,8 @@ function mountSideChat(container,owner,chat){
     }
   };
   transcript.setAttribute('aria-label','侧边聊天记录');status.setAttribute('role','status');
-  form.append(field,send);container.classList.add('side-chat');container.append(empty,transcript,status,form);
+  const questions=element('div','side-chat-questions');
+  form.append(field,send);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   let last='';
   function sync(){
     if(!container.isConnected)return;
@@ -1018,7 +1019,8 @@ function mountSideChat(container,owner,chat){
     send.replaceChildren(chat.pending?element('span','side-chat-stop'):icon('arrow-up'));
     send.disabled=chat.pending?!chat.turn||chat.stopping===chat.turn:!field.value.trim()||openingSideThreads.has(chat)
   }
-  visibleSideChat={chat,sync};sync();
+  pendingQuestions(chat,questions);
+  visibleSideChat={chat,sync,questions};sync();
   form.onsubmit=async event=>{
     event.preventDefault();if(send.disabled)return;
     if(chat.pending){
@@ -1042,7 +1044,7 @@ function mountSideChat(container,owner,chat){
       }
       const id=crypto.randomUUID();chat.pending=id;chat.preview='';chat.phase='正在发送…';
       chat.outbox={id,draft,files:[],options:{expectedThread:chat.thread||null,parent:chat.parent,cwd:chat.cwd||null,projectId:chat.projectId||null,
-        approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(owner)}};
+        collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(owner)}};
       chat.messages.push({role:'user',text:draft,submissionId:id});
       if(chat.draft.trim()===draft){chat.draft='';field.value=''}
       save();void poll(chat,true)
@@ -3983,6 +3985,7 @@ async function poll(c,firstAttempt=false){
       if(!Object.hasOwn(nextRequests,token))try{pageStorage.removeItem(questionDraftKey(c,token))}catch{}
     }
     c.turn=j.turn||null;c.inputRequests=nextRequests;if(current()===c)pendingQuestions(c);
+    if(visibleSideChat?.chat===c&&visibleSideChat.questions.isConnected)pendingQuestions(c,visibleSideChat.questions);
     if(Object.hasOwn(j,'goal')){c.goal=j.goal;if(current()===c)renderGoal(c)}
     for(const message of j.supplements||[])addSupplement(c,message);
     const ordered=Array.isArray(j.order)?orderedMessages(c,j):null;

@@ -6,6 +6,55 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
+test('side chat keeps its opening mode and routes plan questions to its own turn',async()=>{
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
+  try{
+    const page=await browser.newPage({hasTouch:true,viewport:{width:960,height:900},serviceWorkers:'block'});
+    page.setDefaultTimeout(6000);
+    const origin='http://localhost:49011',scope='e'.repeat(64),base='/devices/'+scope;
+    const parent='00000000-0000-4000-8000-000000000015',child='00000000-0000-4000-8000-000000000016';
+    const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
+    let job='',mode='',answer:unknown;
+    await page.addInitScript(({scope,parent})=>{
+      const chat={id:parent,thread:parent,title:'计划',messages:[{role:'user',text:'主任务'}],draft:'',files:[],collaborationMode:'plan'};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:parent,chats:[chat]}));
+    },{scope,parent});
+    await page.route(origin+'/**',async route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(await readFile(assets+'/index.html','utf8'),{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/thread-fork')return route.fulfill({json:{thread:child}});
+      if(path===base+'/api/turn'){
+        const request=route.request().postDataJSON();mode=request.collaborationMode;job=request.id;
+        assert.equal(request.expectedThread,child);return route.fulfill({json:{id:job}});
+      }
+      if(job&&path.startsWith(base+'/api/turn/'+job)){
+        const snapshot={id:job,thread:child,turn:'side-turn',status:answer?'done':'waiting',answer:'已收到回答',
+          inputRequests:{pick:[{id:'format',question:'选择交付格式',options:[{label:'表格'}]}]}};
+        return path.endsWith('/events')?route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'}):route.fulfill({json:snapshot});
+      }
+      if(job&&path===base+'/api/answer/'+job){
+        answer=route.request().postDataJSON();return route.fulfill({json:{ok:true}});
+      }
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],projects:[],models:[],native:false}});
+      return route.fulfill({path:assets+path});
+    });
+    await page.goto(origin+base+'/');
+    await page.keyboard.press('Control+Alt+s');
+    await page.locator('#plan-mode').click();
+    const side=page.locator('.side-chat');
+    await side.locator('textarea').fill('讨论计划');
+    const submitted=page.waitForResponse(res=>res.url()===origin+base+'/api/turn');
+    await side.getByRole('button',{name:'发送',exact:true}).tap();
+    await submitted;
+    assert.equal(mode,'plan');
+    await side.getByRole('radio',{name:'表格'}).check();
+    assert.equal(await page.locator('#pending-questions').getByText('选择交付格式').count(),0);
+    await side.getByRole('button',{name:'提交回答'}).tap();
+    await side.getByText('已收到回答',{exact:true}).waitFor();
+    assert.deepEqual(answer,{turn:'side-turn',token:'pick',answers:{format:{answers:['表格']}}});
+  }finally{await browser.close()}
+});
+
 test('native file search pauses after a bounded scan and can search dependency paths explicitly',async()=>{
   const names=Array.from({length:16},(_,i)=>'dir'+(i+1)),visited:string[]=[];
   let concurrent=0,peak=0;
