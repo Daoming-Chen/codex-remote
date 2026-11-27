@@ -2,7 +2,7 @@ import {withEmbeddedCredentialLock} from './receiver-runtime.mjs';
 import {CodexRemoteClient,ClientModeRuntime,resolveConfig,IdentityStore,serverStorageDirectory,ClientServerApi,ServerCredentialStore} from './vendor/remote.mjs';
 import {access} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {setTimeout as wait} from 'node:timers/promises';
 import {pathToFileURL} from 'node:url';
@@ -169,7 +169,7 @@ try {
  });
 
  const codex=remote.features.codex===true?new CodexRemoteClient(remote.client):null;
- const context={runtime,deviceId:target.deviceId,deviceName:target.name,
+ const context={runtime,connectionId:randomUUID(),deviceId:target.deviceId,deviceName:target.name,
    probe:(timeout=6000)=>remote.client.rpc('harness.transport.describe',{},AbortSignal.timeout(timeout)),
    nativeStream:codex,
    ...webPreviewAccess(runtime,remote.client),
@@ -284,23 +284,26 @@ export function recoverRemote(){
   if(foregroundCheck)return foregroundCheck;
   foregroundCheck=(async()=>{
     const cached=connection;
-    if(!cached){await openRemote();return false}
+    if(!cached)return {reused:false,connectionId:(await openRemote()).connectionId};
     const ctx=await cached;
     for(const timeout of [6000,12000]){
       if(!ctx.connected())break;
-      try{await ctx.probe(timeout);return true}catch(error){
+      try{await ctx.probe(timeout)}catch(error){
         // A reply from an older peer still confirms that the channel is alive.
-        if(error.code==='METHOD_NOT_FOUND'||error.code==='METHOD_NOT_ALLOWED')return true
-        // A foreground transition can delay a probe while the peer is still connected.
-        if(error.code!=='RPC_ABORTED'&&error.name!=='TimeoutError')break
+        if(error.code!=='METHOD_NOT_FOUND'&&error.code!=='METHOD_NOT_ALLOWED'){
+          // A foreground transition can delay a probe while the peer is still connected.
+          if(error.code==='RPC_ABORTED'||error.name==='TimeoutError')continue;
+          break
+        }
       }
+      if(connection===cached&&ctx.connected())return {reused:true,connectionId:ctx.connectionId};
+      break
     }
     if(connection===cached){
       connection=null;
       await ctx.runtime.close().catch(()=>{})
     }
-    await openRemote()
-    return false
+    return {reused:false,connectionId:(await openRemote()).connectionId}
   })().finally(()=>{foregroundCheck=null});
   return foregroundCheck
 }

@@ -247,10 +247,12 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       assert.equal(await messages.getByText('你已停止，已用时 6秒',{exact:true}).count(),1);
       assert.equal(await messages.getByText('已缓存的问题',{exact:true}).count(),1);
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
+      let checks=0;
       await page.route(origin+base+'/api/resume',route=>{
-        connectionReplaced=true;
-        return route.fulfill({json:{connected:true,reused:false}})
+        connectionReplaced=++checks>1;
+        return route.fulfill({json:{connected:true,reused:true,connectionId:connectionReplaced?'new':'old'}})
       });
+      await page.evaluate(()=>window.receiverNetworkResumed?.());
       await page.evaluate(()=>window.receiverNetworkResumed?.());
       await messages.getByText('跨端流式首段及续段',{exact:true}).waitFor({timeout:4000});
       const beforeFinal={parentReads,branchReads};

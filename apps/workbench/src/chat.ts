@@ -4602,7 +4602,7 @@ async function receiverAuthorized(){
   }
   if(!lastDirectorySignature||!$('receiver-setup').hidden)await refreshSidebar()
 }
-let recoveryTimer,recoveryPending=null,recoveryDelay=1000;
+let recoveryTimer,recoveryPending=null,recoveryDelay=1000,lastConnectionId;
 const networkReads=new Set();
 const recoveryStatus=element('div','connection-recovery');
 recoveryStatus.setAttribute('role','status');
@@ -4625,7 +4625,9 @@ async function recoverWorkbenchConnection(replace=false){
     const profile=document.querySelector('.rail-profile'),wasOffline=profile.hasAttribute('data-offline');
     recoveryStatus.replaceChildren();delete profile.dataset.offline;recoveryDelay=1000;
     if(document.hidden)return;
-    if(result.reused!==true||wasOffline){
+    const changed=lastConnectionId&&result.connectionId&&result.connectionId!==lastConnectionId;
+    lastConnectionId=result.connectionId;
+    if(result.reused!==true||changed||wasOffline){
       directoryEvents?.close();directoryEvents=null;
       threadWatch?.source.close();threadWatch=null;
       visibleSideChat?.syncSubscription(true);

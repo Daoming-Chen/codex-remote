@@ -1103,7 +1103,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     if(req.method==='POST'&&req.url==='/api/resume'){
       if(!deviceId||req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
-      const reused=await recoverRemote();return json(200,{connected:true,reused})
+      const recovered=await recoverRemote();return json(200,{connected:true,...recovered})
     }
     if(req.method==='POST'&&req.url==='/api/devices'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
