@@ -6,6 +6,40 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
+test('tablet account usage shows remaining quota graphically and refreshes after a failed read',async()=>{
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
+  try{
+    const page=await browser.newPage({hasTouch:true,viewport:{width:960,height:900},serviceWorkers:'block'});
+    page.setDefaultTimeout(6000);
+    const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
+    const origin='http://localhost:49012',scope='d'.repeat(64),base='/devices/'+scope;
+    const template=await readFile(assets+'/index.html','utf8');
+    let fail=false;
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/account-usage')return fail?route.fulfill({status:503,json:{error:'用量暂时不可用'}}):route.fulfill({json:{
+        groups:[{name:'Codex',windows:[{windowDurationMins:300,usedPercent:67},{windowDurationMins:10080,usedPercent:12}]}]}});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:assets+path});
+    });
+    await page.goto(origin+base+'/');
+    const rail=page.locator('#app-rail [data-action="account-usage"]');
+    await rail.tap();
+    await page.getByRole('progressbar').first().waitFor();
+    assert.deepEqual(await page.getByRole('progressbar').evaluateAll(bars=>bars.map(el=>(el as HTMLProgressElement).value)),[33,88]);
+    assert.doesNotMatch(await page.locator('body').innerText(),/剩余\s*\d+%/);
+    assert.doesNotMatch(await rail.getAttribute('title')||'',/%/);
+    fail=true;
+    await page.getByRole('button',{name:'刷新用量'}).tap();
+    await page.getByText('用量暂时不可用',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('progressbar').count(),0);
+    fail=false;
+    await page.getByRole('button',{name:'刷新用量'}).tap();
+    await page.getByRole('progressbar').first().waitFor();
+  }finally{await browser.close()}
+});
+
 test('side chat keeps its opening mode and routes plan questions to its own turn',async()=>{
   const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
   try{

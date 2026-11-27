@@ -2756,7 +2756,7 @@ function renderQuotaRing(groups){
   }else segment('M16 3.5 A12.5 12.5 0 1 1 16 28.5 A12.5 12.5 0 1 1 16 3.5',weekly||short,weekly?'本周':'5 小时');
   path('M16 10.5 21.5 16 16 21.5 10.5 16Z','quota-symbol');
   quotaButton.replaceChildren(ring);
-  quotaButton.title=['账号用量',...labels].join(' · ');
+  quotaButton.title=matchMedia('(hover:hover)').matches?['账号用量',...labels].join(' · '):'账号用量';
   quotaButton.setAttribute('aria-description',labels.join('，'))
 }
 async function readQuota(){
@@ -2787,8 +2787,9 @@ async function accountUsage(restore=false){
       for(const w of group.windows){
         const mins=w.windowDurationMins;
         const duration=mins>0?(mins%1440===0?mins/1440+' 天':mins%60===0?mins/60+' 小时':mins+' 分钟'):'当前窗口';
-        body.append(element('p','',duration+' · 剩余 '+Math.round(100-w.usedPercent)+'%'));
-        const meter=element('progress','quota-meter');meter.max=100;meter.value=100-w.usedPercent;meter.setAttribute('aria-label',group.name+' '+duration);body.append(meter);
+        body.append(element('p','',duration+'剩余额度'));
+        const meter=element('progress','quota-meter');meter.max=100;meter.value=100-w.usedPercent;
+        meter.setAttribute('aria-label',group.name+' '+duration+'剩余额度');body.append(meter);
         if(Number.isFinite(w.resetsAt))body.append(element('p','quiet','重置时间 '+new Date(w.resetsAt*1000).toLocaleString()))
       }
     }
