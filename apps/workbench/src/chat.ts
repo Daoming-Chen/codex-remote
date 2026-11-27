@@ -1053,7 +1053,7 @@ function mountSideChat(container,owner,chat){
   const entries=[];
   let externalRows=[],externalPreview=null,sideEvents=null,previewFrame=0;
   let externalTurn=null,streamRevision=0;
-  function sync(){
+  function sync(revealSubmission?:string){
     if(!container.isConnected)return;
     syncSubscription();
     modelLabel(chat,modelTrigger);
@@ -1145,6 +1145,13 @@ function mountSideChat(container,owner,chat){
     send.setAttribute('aria-label',running?'停止':'发送');send.title=send.getAttribute('aria-label');
     send.replaceChildren(running?element('span','side-chat-stop'):icon('arrow-up'));
     send.disabled=running?!turn||chat.stopping===turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
+    if(revealSubmission){
+      const question=entries[rows.findIndex(row=>row.submissionId===revealSubmission)]?.message;
+      if(question){
+        const bubble=question.getBoundingClientRect(),viewport=transcript.getBoundingClientRect();
+        transcript.scrollTop+=Math.max(0,Math.min(bubble.bottom-viewport.bottom,bubble.top-viewport.top))
+      }
+    }
   }
   pendingQuestions(chat,questions);
   let readingHistory=false,refreshAgain=false;
@@ -1283,6 +1290,7 @@ function mountSideChat(container,owner,chat){
     }
     const files=chat.files||[];
     if(new TextEncoder().encode(promptWithFiles(draft,files)).length>16000){toast('单条消息最多 16 KB');return}
+    let submittedId:string|undefined;
     try{
       if(!chat.thread&&!await prepareThread())return;
       if(chat.draft.trim()!==draft||(chat.files&&chat.files!==files))return;
@@ -1292,11 +1300,12 @@ function mountSideChat(container,owner,chat){
         collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(chat)}};
       chat.messages.push({role:'user',text:[draft,...files.map(file=>'📎 '+file.name)].filter(Boolean).join('\n'),
         images:files.filter(file=>file.url).map(file=>file.url),submissionId:id});
+      submittedId=id;
       chat.files=chat.files?.filter(file=>!files.includes(file))||[];
       if(chat.draft.trim()===draft){chat.draft='';field.value=''}
       save();void poll(chat,true)
     }catch(error){chat.error=error.message;save()}
-    finally{sync()}
+    finally{sync(submittedId)}
   };
   if(chat.pending)void poll(chat)
 }

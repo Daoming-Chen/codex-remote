@@ -75,6 +75,41 @@ d$$。`;
   }finally{await browser.close()}
 });
 
+test('sending from older side chat history reveals the submitted question',async()=>{
+  const browser=await launch();
+  try{
+    const page=await browser.newPage({serviceWorkers:'block'});
+    const parent='00000000-0000-4000-8000-000000000030',thread='00000000-0000-4000-8000-000000000031';
+    await page.addInitScript(({parent,thread,scope})=>{
+      const messages=Array.from({length:50},(_,i)=>({role:'assistant',text:'历史回复 '+i}));
+      const side={id:thread,thread,messages,draft:'',files:[]};
+      const tab='receiver:side-chat';
+      const owner={id:parent,thread:parent,messages:[],sideChats:[side],workView:{ids:[tab],active:tab}};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:parent,chats:[owner]}))
+    },{parent,thread,scope:host.scope});
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[],messages:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))})
+    });
+    await page.goto(origin+base+'/');
+    const history=page.locator('.side-chat-history');
+    await history.getByText('历史回复 49',{exact:true}).waitFor();
+    await page.locator('.side-chat textarea').fill('从历史位置发送');
+    assert(await history.evaluate(el=>{el.scrollTop=0;return el.scrollHeight-el.clientHeight>500}));
+    await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).click();
+    const question=history.getByText('从历史位置发送',{exact:true});
+    await question.waitFor();
+    assert(await question.evaluate(el=>{
+      const bubble=el.getBoundingClientRect(),pane=el.closest('.side-chat-history')!.getBoundingClientRect();
+      return bubble.top>=pane.top-1&&bubble.bottom<=pane.bottom+1
+    }));
+  }finally{await browser.close()}
+});
+
 test('a dropped shared turn resumes without a reconnect toast over the chat',async()=>{
   const browser=await launch();
   try{
