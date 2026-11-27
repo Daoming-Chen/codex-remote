@@ -85,6 +85,9 @@ dialog.model-menu::backdrop{background:transparent}
 .work-command{white-space:pre-wrap;overflow-wrap:anywhere}
 #work-resize{position:absolute;left:-4px;inset-block:0;width:8px;cursor:col-resize;touch-action:none}
 @media(max-width:800px){#workbench{position:fixed;inset:0;z-index:6}#work-resize{display:none}}
+@media(max-width:800px){
+  #layout.work-panel-open:not(.plugins-open)>:not(#workbench){visibility:hidden}
+}
 
 .work-file{margin-block:10px;border:1px solid var(--edge);border-radius:8px;overflow:hidden}
 .work-file summary{padding:7px 10px;cursor:pointer;overflow-wrap:anywhere}

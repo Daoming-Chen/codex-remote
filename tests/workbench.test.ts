@@ -749,6 +749,17 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.locator('#header-options').tap();
     await page.getByRole('button',{name:'新建侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
+    await page.setViewportSize({width:600,height:900});
+    await sideDraft.waitFor();
+    assert(await page.locator('#prompt').isHidden(),'fullscreen panel hides the main composer');
+    await page.locator('#prompt').evaluate(input=>input.focus());
+    assert.equal(await page.locator('#prompt').evaluate(input=>input===document.activeElement),false);
+    await page.locator('#work-hide').tap();
+    await page.locator('#prompt').waitFor();
+    await page.locator('#home-panel-toggle button').tap();
+    await sideDraft.waitFor();
+    await page.setViewportSize({width:820,height:900});
+    await page.locator('#prompt').waitFor();
     for(const command of ['/side','/side 帮我看看']){
       await sideDraft.fill(command);
       await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();

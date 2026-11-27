@@ -1350,6 +1350,10 @@ function endedActivityTurns(chat){
 let stopPanelSearch;
 function renderWorkbench(){
   const pane=$('workbench'),chat=current(),view=chat.workView;
+  function showPanel(visible){
+    pane.hidden=!visible;
+    $('layout').classList.toggle('work-panel-open',visible)
+  }
   const detail=$('work-detail');
   if(workChat!==chat.id){rememberWorkScroll(detail);previousDetail=null;previousTabs='';workChat=chat.id}
   const summary=!!chat.summaryOpen&&chat.messages.length>0;
@@ -1372,7 +1376,7 @@ function renderWorkbench(){
   }
   empty.hidden=!emptyPanel;
   if(emptyPanel){
-    pane.hidden=false;
+    showPanel(true);
     $('work-detail').replaceChildren();
     if(!stopPanelSearch){
       empty.dataset.key=searchKey;stopPanelSearch=mountEmptyPanel(empty,chat);
@@ -1386,17 +1390,17 @@ function renderWorkbench(){
   }
   $('work-tab-list').hidden=summary;
   $('header-summary').setAttribute('aria-pressed',String(summary&&!hidden));
-  if(hidden){pane.hidden=true;return}
-  if(summary){rememberWorkScroll(detail);pane.hidden=false;previousTabs='';previousDetail=null;renderThreadSummary(chat);return}
+  if(hidden){showPanel(false);return}
+  if(summary){rememberWorkScroll(detail);showPanel(true);previousTabs='';previousDetail=null;renderThreadSummary(chat);return}
   summarySnapshot=null;
-  pane.hidden=!view?.ids.length;
+  showPanel(!!view?.ids.length);
   if(pane.hidden){if(detail.querySelector('.panel-tool'))detail.replaceChildren();previousDetail=null;previousTabs='';return}
   const latest=chatWorkRecords(chat);
   const sideChats=attachedSideChats(chat);
   if(view.ids.includes(sideChatTab.id)&&!sideChats.length)createSideChat(chat);
   const sideRecords=new Map(sideChats.map((side,index)=>[sideRecord(side,index).id,sideRecord(side,index)]));
   const openRecords=view.ids.map(id=>sideRecords.get(id)||panelTools.get(id)||latest.get(id)||workItems.get(chat)?.get(id)).filter(Boolean);
-  if(!openRecords.length){pane.hidden=true;previousDetail=null;previousTabs='';return}
+  if(!openRecords.length){showPanel(false);previousDetail=null;previousTabs='';return}
   const activeRecord=openRecords.some(r=>r.id===view.active)?view.active:openRecords.at(-1).id;
   const tabs=$('work-tabs');
   const activeSide=sideRecords.get(activeRecord);
