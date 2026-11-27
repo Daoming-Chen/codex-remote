@@ -10,7 +10,7 @@
  <uses-feature android:name="android.hardware.microphone" android:required="false"/>
  <application android:label="Codex Remote" android:icon="@mipmap/ic_launcher" android:allowBackup="false" android:usesCleartextTraffic="true" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.NoActionBar">
   <service android:name=".ConnectionService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="connectedDevice"/>
-  <activity android:name=".ReceiverActivity" android:exported="true" android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout" android:windowSoftInputMode="adjustResize">
+  <activity android:name=".ReceiverActivity" android:exported="true" android:launchMode="singleTop" android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout" android:windowSoftInputMode="adjustResize">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
   </activity>
  </application>
