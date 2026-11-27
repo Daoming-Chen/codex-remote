@@ -1,5 +1,7 @@
 import MarkdownIt from 'markdown-it';
 import {tasklist} from '@mdit/plugin-tasklist';
+import {tex} from '@mdit/plugin-tex';
+import {renderToString} from 'katex';
 
 declare global {
   interface Window {
@@ -10,6 +12,13 @@ declare global {
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
 markdown.disable('image');
 markdown.use(tasklist, {label:false});
+markdown.use(tex, {
+  delimiters: 'all',
+  mathFence: true,
+  render(source: string, displayMode: boolean) {
+    return renderToString(source, {displayMode, throwOnError:false, trust:false, maxSize:20});
+  },
+});
 
 window.renderMarkdown = text => markdown.render(text);
 window.renderMarkdownBlocks = text => {

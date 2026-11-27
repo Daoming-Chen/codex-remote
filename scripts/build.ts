@@ -40,6 +40,17 @@ await build({
   absWorkingDir: root, entryPoints: ['apps/workbench/src/markdown.ts'],
   outfile: 'web/markdown.js', bundle: true, minify: true, target: browserTarget,
 });
+// All supported WebViews have WOFF2. Embed those fonts so formulas also work offline.
+const katexDist = resolve(root, 'node_modules/katex/dist');
+const katexCss = (await readFile(resolve(katexDist, 'katex.css'), 'utf8'))
+  .replace(/(format\("woff2"\)),[^;]+;/g, '$1;');
+const mathStyles = await build({
+  stdin: {contents:katexCss, loader:'css', resolveDir:katexDist},
+  bundle:true, write:false, minify:true, loader:{'.woff2':'dataurl'}, target:browserTarget,
+});
+const css = resolve(root, 'web/chat.css');
+const katexLicense = await readFile(resolve(katexDist, '../LICENSE'), 'utf8');
+await writeFile(css, (await readFile(css, 'utf8')) + '\n/*! KaTeX\n' + katexLicense + '*/\n' + mathStyles.outputFiles[0].text);
 const components = await build({
   absWorkingDir: root, entryPoints: ['apps/workbench/src/WorkbenchComponents.tsx'],
   bundle: true, write: false, minify: true, target: browserTarget,

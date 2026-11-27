@@ -16,6 +16,43 @@ function launch() {
   return chromium.launch(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'msedge'});
 }
 
+test('streamed Markdown lays out TeX with bundled fonts and preserves literal code',async()=>{
+  const browser=await launch();
+  try{
+    const page=await browser.newPage({serviceWorkers:'block'});
+    const thread='00000000-0000-4000-8000-000000000024',job='00000000-0000-4000-8000-000000000025';
+    await page.addInitScript(({thread,job,scope})=>{
+      const chat={id:thread,thread,pending:job,title:'公式',draft:'',files:[],messages:[{role:'user',text:'解释公式'}]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:thread,chats:[chat]}))
+    },{thread,job,scope:host.scope});
+    const start='行内 $x^2$ 和 \\(a_i\\)。\n\n$$\n\\frac{1}{';
+    const answer=start+'2}\n$$\n\n\\[\\sqrt{x}\\]\n\n`$code$`，价格 $5 和 $10。\n\n```math\nx^3\n```';
+    let complete=false;
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path.startsWith(base+'/api/turn/'+job)){
+        const snapshot={id:job,thread,turn:'math-turn',status:complete?'done':'running',progress:{message:start},answer:complete?answer:''};
+        return path.endsWith('/events')?route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'}):route.fulfill({json:snapshot})
+      }
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))})
+    });
+    await page.goto(origin+base+'/');
+    const messages=page.locator('#messages');
+    await messages.locator('.live-answer .katex').nth(1).waitFor();
+    complete=true;
+    await messages.locator('.answer .katex-display').nth(2).waitFor();
+    assert.equal(await messages.locator('.katex').count(),5);
+    assert.equal(await messages.locator('.katex-error').count(),0);
+    assert.equal(await messages.locator('code').innerText(),'$code$');
+    assert.match(await messages.innerText(),/价格 \$5 和 \$10/);
+    assert(await page.evaluate(async()=>(await document.fonts.load('16px KaTeX_Main')).some(face=>face.status==='loaded')));
+  }finally{await browser.close()}
+});
+
 test('a dropped shared turn resumes without a reconnect toast over the chat',async()=>{
   const browser=await launch();
   try{
