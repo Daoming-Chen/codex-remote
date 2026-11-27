@@ -146,7 +146,8 @@ for(const side of [false,true])test('cold reopening a reconnecting turn preserve
       if(path.startsWith(base+'/api/turn/'+job)){
         if(holdUpdates)await networkRestored;
         const snapshot={id:job,thread,turn:'original-turn',status:resumed?'done':'waiting',reconnecting:!resumed,
-          parts:['已收到的第一段'],progress:{message:'已收到的第二段'},answer:'已收到的第一段\n\n已收到的第二段。'};
+          parts:['已收到的第一段'],progress:{message:'已收到的第二段',items:[{id:'check',type:'commandExecution',
+            command:'pwd',status:resumed?'completed':'inProgress',output:resumed?'remote-dir':'remote-'}]},answer:'已收到的第一段\n\n已收到的第二段。'};
         return path.endsWith('/events')?route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'}):route.fulfill({json:snapshot});
       }
       if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
@@ -157,6 +158,12 @@ for(const side of [false,true])test('cold reopening a reconnecting turn preserve
     await messages.getByText('已收到的第二段',{exact:true}).waitFor({timeout:4000});
     assert.equal(await messages.getByText('已收到的第一段',{exact:true}).count(),1);
     assert.doesNotMatch(await messages.innerText(),/正在重新连接/);
+    if(side){
+      const timeline=messages.locator('.timeline');
+      await timeline.locator('summary').click();
+      assert.equal(await timeline.locator('.command-output').innerText(),'remote-');
+      assert.equal(await timeline.getByText('执行中',{exact:true}).count(),1)
+    }
     holdUpdates=true;
     await page.reload({waitUntil:'domcontentloaded'});
     await messages.getByText('已收到的第二段',{exact:true}).waitFor({timeout:4000});
@@ -164,6 +171,13 @@ for(const side of [false,true])test('cold reopening a reconnecting turn preserve
     releaseUpdates();
     await messages.getByText('已收到的第二段。',{exact:true}).waitFor();
     assert.equal(await messages.getByText('已收到的第一段',{exact:true}).count(),1);
+    if(side){
+      const timeline=messages.locator('.timeline');
+      assert.equal(await timeline.count(),1);
+      if(!await timeline.evaluate(el=>(el as HTMLDetailsElement).open))await timeline.locator('summary').click();
+      assert.equal(await timeline.locator('.command-output').innerText(),'remote-dir');
+      assert.equal(await timeline.getByText('已完成',{exact:true}).count(),1)
+    }
   }finally{await browser.close()}
 });
 

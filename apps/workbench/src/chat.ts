@@ -1050,9 +1050,14 @@ function mountSideChat(container,owner,chat){
     if(!container.isConnected)return;
     modelLabel(chat,modelTrigger);
     const ordered=chat.pending&&orderedSnapshots.get(chat);
-    const rows=(ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)
-      .filter(m=>m.text||m.images?.length||m.role==='steps');
-    if(!ordered?.length&&chat.pending&&chat.preview)rows.push({role:'assistant',turn:chat.turn,text:chat.preview});
+    const rows=[];
+    const appendRow=m=>{
+      if(m.items?.length)rows.push({role:'activity',turn:m.turn,id:m.items[0].id,items:m.items});
+      if(m.role!=='activity'&&(m.text||m.images?.length||m.role==='steps'))rows.push(m)
+    };
+    for(const m of ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)appendRow(m);
+    if(!ordered?.length&&chat.pending)appendRow({role:'assistant',turn:chat.turn,text:chat.preview,items:chat.items});
+    const endings=endedActivityTurns(chat);
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
     const stored=new Set(chat.messages);
     for(const row of ordered||[])stored.delete(row);
@@ -1066,6 +1071,15 @@ function mountSideChat(container,owner,chat){
         for(const obsolete of entries.splice(index)){obsolete.message.remove();obsolete.actions?.remove()}
         entry={key,message:element('div',role==='user'?'side-question':'answer'),wrapped:new Set()};
         entries.push(entry);transcript.append(entry.message)
+      }
+      if(role==='activity'){
+        const ending=endings.get(row.turn),snapshot=JSON.stringify([ending,row.items]);
+        if(entry.activitySnapshot!==snapshot){
+          const details=entry.message.firstElementChild||entry.message.appendChild(element('details','timeline'));
+          activity(row.items,ending,row.turn,details,chat);
+          entry.activitySnapshot=snapshot
+        }
+        continue
       }
       if(role==='steps'||role==='plan'){
         const plan=JSON.stringify([text,row.steps,row.explanation]);
@@ -1629,9 +1643,9 @@ function disclosureOpen(key){
 function rememberDisclosure(key,open){
   try{if(open)pageStorage.setItem(key,'1');else pageStorage.removeItem(key)}catch{}
 }
-function activity(items,ending,turn,details=element('details','timeline')){
+function activity(items,ending,turn,details=element('details','timeline'),chat=current()){
   if(turn&&items[0]?.id){
-    const key=disclosureKey(current(),turn,items[0].id);
+    const key=disclosureKey(chat,turn,items[0].id);
     if(details.dataset.disclosure!==key){
       details.dataset.disclosure=key;details.open=disclosureOpen(key);
       details.disclosureObserver?.disconnect();
@@ -1653,8 +1667,8 @@ function activity(items,ending,turn,details=element('details','timeline')){
     if(!record){
       record=element('div','timeline-record');record.dataset.key=key;
       const line=element('div','timeline-line');
-      line.append(icon(activityIcons[item.type]||'server'),element('code'),element('small','quiet'),
-        btn('在工作区打开执行记录','panel-left',()=>openRecord(record.item)));
+      line.append(icon(activityIcons[item.type]||'server'),element('code'),element('small','quiet'));
+      if(chat===current())line.append(btn('在工作区打开执行记录','panel-left',()=>openRecord(record.item)));
       record.append(line,element('small','quiet',truncationLabel(item)),element('pre','command-output'),element('small','quiet'))
     }
     record.item=item;
