@@ -61,7 +61,7 @@ dialog.model-menu::backdrop{background:transparent}
 .side-chat-empty span{font-size:14px;line-height:20px}
 .side-chat .quiet:empty{display:none}
 .side-chat > form{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid var(--edge);border-radius:18px;background:var(--box);box-shadow:var(--shadow)}
-.side-chat textarea{width:100%;min-height:40px;resize:none;background:transparent;border:0;padding:2px 4px;outline:none}
+.side-chat textarea{flex:none;width:100%;min-height:40px;resize:none;background:transparent;border:0;padding:2px 4px;outline:none}
 .side-chat > form:focus-within{border-color:var(--muted)}
 .side-attachments:not([hidden]){display:flex;flex-wrap:wrap;gap:4px}
 .side-chat > form > button{align-self:flex-end;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--send);color:var(--on-send)}

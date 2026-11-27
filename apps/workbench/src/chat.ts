@@ -624,10 +624,10 @@ async function followExternalTurn(c,revision,notify=false){
     }
   }finally{if(externalFollowers.get(c)===follower)externalFollowers.delete(c)}
 }
-function fitPrompt(){
-  const box=$('prompt');
+function fitEditor(box){
   box.style.height='auto';box.style.height=Math.min(180,box.scrollHeight)+'px'
 }
+function fitPrompt(){fitEditor($('prompt'))}
 let promptWidth;
 new ResizeObserver(([entry])=>{
   if(entry.contentRect.width===promptWidth)return;
@@ -984,13 +984,20 @@ function createSideChat(owner){
 }
 const openingSideThreads=new WeakSet();
 let visibleSideChat;
+let sidePanelWidth;
+new ResizeObserver(([entry])=>{
+  if(entry.contentRect.width===sidePanelWidth)return;
+  sidePanelWidth=entry.contentRect.width;
+  const field=entry.target.querySelector('.side-chat textarea');
+  if(field&&sidePanelWidth)fitEditor(field)
+}).observe($('work-detail'));
 function mountSideChat(container,owner,chat){
   const transcript=element('div','side-chat-history'),status=element('p','quiet');
   const form=document.createElement('form'),field=document.createElement('textarea'),send=element('button','','发送');
   const empty=element('div','side-chat-empty');
   empty.append(icon('message-circle'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
   field.placeholder='在侧边聊天中提问';field.setAttribute('aria-label',field.placeholder);
-  field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;save();sync()};
+  field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;fitEditor(field);save();sync()};
   field.onkeydown=event=>{
     if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
       event.preventDefault();if(!event.repeat&&!chat.pending)form.requestSubmit()
@@ -1001,6 +1008,7 @@ function mountSideChat(container,owner,chat){
   const attachments=element('div','side-attachments');
   let renderedFiles;
   form.append(attachments,field,send);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
+  fitEditor(field);
   let last='';
   let displayedImages=[];
   function sync(){
@@ -1026,7 +1034,7 @@ function mountSideChat(container,owner,chat){
       }
       if(atEnd)transcript.scrollTop=transcript.scrollHeight
     }
-    if(field.value!==chat.draft)field.value=chat.draft;
+    if(field.value!==chat.draft){field.value=chat.draft;fitEditor(field)}
     if(renderedFiles!==chat.files){
       renderedFiles=chat.files;
       WorkbenchComponents.renderAttachments(attachments,{files:chat.files||[],host:receiverName,preview:openAttachmentPreview,

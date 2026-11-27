@@ -95,7 +95,12 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.getByRole('menuitemradio',{name:'bravo',exact:true}).click();
     await page.keyboard.press('Escape');
     const side=page.locator('.side-chat');
+    const editor=side.locator('textarea');
+    const initialHeight=await editor.evaluate(field=>field.clientHeight);
+    await editor.fill(Array(8).fill('侧聊草稿').join('\n'));
+    assert(await editor.evaluate(field=>field.clientHeight)>initialHeight);
     await side.locator('textarea').fill('讨论计划');
+    assert.equal(await editor.evaluate(field=>field.clientHeight),initialHeight);
     const submitted=page.waitForResponse(res=>res.url()===origin+base+'/api/turn');
     await side.getByRole('button',{name:'发送',exact:true}).tap();
     const selection=(await submitted).request().postDataJSON();
