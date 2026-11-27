@@ -96,6 +96,8 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await page.getByRole('menuitemradio',{name:'bravo',exact:true}).click();
     await page.keyboard.press('Escape');
     const side=page.locator('.side-chat');
+    assert.equal(await side.locator('textarea').getAttribute('placeholder'),'描述你的任务以生成计划…');
+    assert.equal(await page.locator('#prompt').getAttribute('placeholder'),'和 Codex 一起工作');
     const sideModels=side.getByRole('button',{name:'选择模型与推理强度'});
     assert.match(await sideModels.innerText(),/alpha/);
     await sideModels.tap();

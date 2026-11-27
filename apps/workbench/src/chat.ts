@@ -844,7 +844,11 @@ function renderDraft(chat){
   if(input.value!==value)input.value=value;
   renderedDraftChat=chat.id
 }
-function composer(){const c=current();archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();WorkbenchComponents.renderAttachments($('attachment'),{
+function composerPlaceholder(chat,followUp){
+  if(chat.collaborationMode==='plan')return '描述你的任务以生成计划…';
+  return followUp?'和 Codex 一起工作':'随心输入'
+}
+function composer(){const c=current();promptBox.placeholder=composerPlaceholder(c,!!c.thread||!!c.messages.length);archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();WorkbenchComponents.renderAttachments($('attachment'),{
     files:c.files,host:receiverName,preview:openAttachmentPreview,
     remove(file){c.files=c.files.filter(item=>item!==file);save();composer()}
   });resize()}
@@ -1010,8 +1014,8 @@ function mountSideChat(container,owner,chat){
   const transcript=element('div','side-chat-history'),status=element('p','quiet');
   const form=document.createElement('form'),field=document.createElement('textarea'),send=element('button','','发送');
   const empty=element('div','side-chat-empty');
-  empty.append(icon('message-circle'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
-  field.placeholder='在侧边聊天中提问';field.setAttribute('aria-label',field.placeholder);
+  empty.append(icon('side-chat-new'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
+  field.placeholder=composerPlaceholder(chat,true);field.setAttribute('aria-label','在侧边聊天中提问');
   field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;fitEditor(field);save();sync()};
   field.onkeydown=event=>{
     if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
@@ -2033,7 +2037,7 @@ function renderChatTitle(c){
   const title=c.messages.length||c.thread?c.title:'新聊天';
   $('header-thread').textContent=title;document.title=title+' · Codex'
 }
-function messages(jump=true){renderWorkbench();const c=current();if(readingReply&&!c.messages.includes(readingReply.message))stopReadingReply();const pane=$('scroller'),bottom=isAtLatestMessage(pane);const empty=!c.messages.length&&!c.thread;$('layout').classList.toggle('empty',empty);promptBox.placeholder=empty?'随心输入':'和 Codex 一起工作';const root=$('messages');
+function messages(jump=true){renderWorkbench();const c=current();if(readingReply&&!c.messages.includes(readingReply.message))stopReadingReply();const pane=$('scroller'),bottom=isAtLatestMessage(pane);const empty=!c.messages.length&&!c.thread;$('layout').classList.toggle('empty',empty);promptBox.placeholder=composerPlaceholder(c,!empty);const root=$('messages');
   syncThreadWatch();
   const ordered=c.pending&&orderedSnapshots.get(c);
   const orderedUsers=new Set(ordered?ordered.filter(m=>m.clientId).map(m=>m.clientId):[]);
