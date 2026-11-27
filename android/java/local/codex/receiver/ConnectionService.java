@@ -16,15 +16,29 @@ public final class ConnectionService extends Service {
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private ConnectivityManager networks;
     private volatile String route;
+    private Network activeNetwork;
+    private boolean validated;
     private boolean busy,wakeAgain;
     private long delay=1000;
     private final Runnable check=this::probe;
     private final ConnectivityManager.NetworkCallback callback=new ConnectivityManager.NetworkCallback(){
-        @Override public void onAvailable(Network network){schedule(500);}
+        @Override public void onAvailable(Network network){
+            activeNetwork=network;validated=false;delay=1000;schedule(500);
+        }
+        @Override public void onCapabilitiesChanged(Network network,NetworkCapabilities capabilities){
+            if(!network.equals(activeNetwork))return;
+            boolean ready=capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            if(ready&&!validated)schedule(500);
+            validated=ready;
+        }
+        @Override public void onLost(Network network){
+            if(!network.equals(activeNetwork))return;
+            activeNetwork=null;validated=false;wakeAgain=false;handler.removeCallbacks(check);
+        }
     };
     private void schedule(long ms){
         handler.removeCallbacks(check);
-        if(route!=null)handler.postDelayed(check,ms);
+        if(route!=null&&activeNetwork!=null)handler.postDelayed(check,ms);
     }
     @Override public void onCreate(){
         super.onCreate();
