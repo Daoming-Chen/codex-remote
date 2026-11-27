@@ -35,6 +35,9 @@ public final class ConnectionService extends Service {
             if(!network.equals(activeNetwork))return;
             activeNetwork=null;validated=false;wakeAgain=false;handler.removeCallbacks(check);
         }
+        @Override public void onLinkPropertiesChanged(Network network,LinkProperties properties){
+            if(network.equals(activeNetwork))schedule(500);
+        }
     };
     private void schedule(long ms){
         handler.removeCallbacks(check);

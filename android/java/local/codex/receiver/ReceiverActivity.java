@@ -4,6 +4,7 @@ import android.os.*;
 import android.content.*;
 import android.net.Uri;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.webkit.*;
@@ -71,6 +72,9 @@ public final class ReceiverActivity extends Activity {
         }
         @Override public void onLost(Network network){
             if(network.equals(last)){last=null;validated=false;needsRecovery=true;}
+        }
+        @Override public void onLinkPropertiesChanged(Network network,LinkProperties properties){
+            if(network.equals(last))scheduleRecovery(500);
         }
     };
     public static final class DraftStore {
