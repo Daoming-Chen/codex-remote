@@ -2,9 +2,11 @@ import { renderWorkbenchPage } from '../apps/receiver/src/workbench-page.mts';
 import { searchDirectoryFiles } from '../apps/workbench/src/PanelSearch.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { chromium, type Route } from 'playwright-core';
 
 test('tablet account usage shows remaining quota graphically and refreshes after a failed read',async()=>{
   const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
@@ -400,11 +402,16 @@ test('authorization refresh discards a stale device before restoring a saved sel
   } finally { await browser.close() }
 });
 
-test('restore a streaming turn after sending on another device with the same thread ID', async () => {
-  const browser = await chromium.launch(process.env.CHROMIUM_PATH
-    ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
+test('restore a streaming turn after sending on another device with the same thread ID', async t => {
+  const profile = await mkdtemp(join(tmpdir(),'codex-remote-host-switch-'));
+  t.after(()=>rm(profile,{recursive:true,force:true,maxRetries:3}));
+  const openBrowser = () => chromium.launchPersistentContext(profile,{
+    ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'msedge'}),
+    serviceWorkers:'block',
+  });
+  let browser = await openBrowser();
   try {
-    const page = await browser.newPage({ serviceWorkers: 'block' });
+    let page = await browser.newPage();
     page.setDefaultTimeout(10000);
     const hosts = ['a', 'b'].map(key => ({deviceId: key, scope: key.repeat(64), name: '同名设备', online: true}));
     const origin = 'http://localhost:49004';
@@ -414,7 +421,7 @@ test('restore a streaming turn after sending on another device with the same thr
     const wrongHost: string[] = [];
     let publishRename!:()=>void;
     const renamed=new Promise<void>(resolve=>{publishRename=resolve});
-    await page.route(origin + '/**', async route => {
+    async function hostResponse(route:Route) {
       const path = new URL(route.request().url()).pathname;
       const device = hosts.find(host => path.startsWith('/devices/' + host.scope + '/'));
       const api = device ? path.slice(('/devices/' + device.scope).length) : path;
@@ -451,7 +458,8 @@ test('restore a streaming turn after sending on another device with the same thr
       if (api.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: [], ids: []}});
       const file = path === '/devices' || path === '/' ? 'devices.html' : path.slice(1);
       return route.fulfill({path: fileURLToPath(new URL('../web/' + file, import.meta.url))});
-    });
+    }
+    await page.route(origin+'/**',hostResponse);
     async function select(index: number) {
       if(page.url()==='about:blank')await page.goto(origin + '/devices');
       else await page.getByRole('link',{name:/切换设备/}).click();
@@ -464,7 +472,7 @@ test('restore a streaming turn after sending on another device with the same thr
       await page.locator('#prompt').fill(message);
       await page.locator('#prompt').press('Enter');
     }
-    const messages = page.locator('#messages');
+    let messages = page.locator('#messages');
     await select(0);
     const started = page.waitForRequest(req => req.url().includes('/api/turn/') && req.url().endsWith('/events'));
     await send('第一台的提问');
@@ -481,6 +489,7 @@ test('restore a streaming turn after sending on another device with the same thr
     await send('第二台的提问');
     await messages.getByText('b 的最终回复', {exact: true}).waitFor();
     assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台的第一段|第二段正在输出/);
+    await page.locator('#prompt').fill('第二台未发送');
     await page.getByRole('button', {name: '设置',exact:true}).click();
     await page.getByRole('button', {name: '连接信息',exact:true}).click();
     await page.getByText(/前台发送到页面收到首段正文/).waitFor();
@@ -488,9 +497,15 @@ test('restore a streaming turn after sending on another device with the same thr
     await select(0);
     assert.equal(await page.locator('#prompt').inputValue(),'第一台未发送');
     await messages.getByText('第二段正在输出', {exact: true}).waitFor();
+    await browser.close();
+    browser=await openBrowser();
+    page=await browser.newPage();
+    page.setDefaultTimeout(10000);
+    await page.route(origin+'/**',hostResponse);
+    messages=page.locator('#messages');
     await page.goto(origin+'/');
     await page.waitForURL('**/devices/'+hosts[0].scope+'/');
-    assert.equal(await renamedLink.textContent(),'SN');
+    assert.equal(await page.getByRole('link',{name:'切换设备，当前为 Studio North'}).textContent(),'SN');
     assert.equal(await page.locator('#prompt').inputValue(),'第一台未发送');
     await messages.getByText('第二段正在输出', {exact: true}).waitFor();
     assert.equal(await messages.getByText('第一台的第一段', {exact: true}).count(), 1);
@@ -500,6 +515,9 @@ test('restore a streaming turn after sending on another device with the same thr
     assert.doesNotMatch(await messages.innerText(), /第二段正在输出/);
     assert.match(await messages.innerText(), /第一台的提问/);
     assert.doesNotMatch(await messages.innerText(), /第二台的提问|b 的最终回复/);
+    await select(1);
+    assert.equal(await page.locator('#prompt').inputValue(),'第二台未发送');
+    await messages.getByText('b 的最终回复',{exact:true}).waitFor();
     assert.deepEqual(posts, ['a', 'b']);
     assert.deepEqual(wrongHost, []);
   } finally { await browser.close() }
