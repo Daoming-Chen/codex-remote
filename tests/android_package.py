@@ -25,16 +25,37 @@ export async function authorizeReceiver({onScanUrl}){
   if(attempt===1)throw Object.assign(Error('expired'),{code:'REMOTE_AUTH_EXPIRED'});
   return {status:'complete'}
 }
-export async function* remoteLines(){throw Error('offline fixture')}
-export function bindReceiverDevice(){}
+let boundDevice;
+export function bindReceiverDevice(id){boundDevice=id}
+export async function* remoteLines(command){
+ if(boundDevice!=='daemon-fixture')throw Error('offline fixture');
+ if(command.endsWith('&& echo CREATED')){yield 'CREATED';return}
+ if(command.endsWith('&& echo STORED')){yield 'STORED';return}
+ if(command.endsWith('&& echo READY')){yield 'READY';return}
+ if(!command.includes('/follow.py ')||!command.endsWith(' 1'))throw Error('Unexpected daemon replay');
+ const events=[
+  {type:'command.output',item_id:'cmd',delta:'second line'},
+  {type:'item.completed',item:{id:'cmd',type:'commandExecution',status:'completed',output:'first and second lines',exitCode:0}},
+  {type:'item.completed',item:{id:'msg',type:'agent_message',text:'finished'}},
+  {type:'turn.completed'}
+ ];
+ for(const [index,event] of events.entries()){
+  yield 'CX '+(index+2)+' '+Buffer.from(JSON.stringify(event)).toString('base64');
+  if(index===0){
+   const {access}=await import('node:fs/promises');
+   while(!await access(new URL('./finish-command',import.meta.url)).then(()=>true,()=>false))
+    await new Promise(resolve=>setTimeout(resolve,20))
+  }
+ }
+}
 const directoryFailures=[{code:'REMOTE_NOT_PAIRED'},{code:'AUTH_INVALID'},{code:'PEER_IDENTITY_MISMATCH'},
  {code:'CONNECTION_FAILED',reason:'timeout'},{code:'SERVER_CREDENTIALS_LOCK_UNSUPPORTED'},{code:'UNEXPECTED'}];
 export async function listReceiverDevices(){
  const failure=directoryFailures.shift();
  if(failure)throw Object.assign(Error('private upstream detail'),failure);
- return [{deviceId:'preview-fixture',name:'预览主机',online:true}]
+ return [{deviceId:'preview-fixture',name:'预览主机',online:true},{deviceId:'daemon-fixture',name:'命令测试主机',online:true}]
 }
-export async function openRemote(){return {
+export async function openRemote(){if(boundDevice==='daemon-fixture')return {};return {
  nativeCall:async(method,params)=>{
   if(method!=='thread/fork'||params.threadId!=='00000000-0000-4000-8000-000000000001')
     throw Error('Unexpected side chat target');
@@ -93,9 +114,34 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
      assert 'private upstream detail' not in result['error']
    devices=json.load(urllib.request.urlopen(request))['devices']
    scope=hashlib.sha256(b'preview-fixture').hexdigest()
-   assert len(devices)==1 and devices[0]['scope']==scope
+   daemon_scope=hashlib.sha256(b'daemon-fixture').hexdigest()
+   assert {device['scope'] for device in devices}=={scope,daemon_scope}
    preview=url+'devices/'+scope+'/api/web-preview/'
    headers={'Cookie':'receiver=isolated-cookie','Sec-Fetch-Site':'same-origin'}
+   # Resume exactly where a receiver stopped after seeing a command start.
+   state_dir=app/'state'/'devices'/daemon_scope
+   state_dir.mkdir(parents=True,exist_ok=True)
+   job_id='00000000-0000-4000-8000-000000000004'
+   job_file=state_dir/(job_id+'.json')
+   job_file.write_text(json.dumps({'id':job_id,'thread':'00000000-0000-4000-8000-000000000005',
+    'turn':'00000000-0000-4000-8000-000000000006','backend':'daemon','status':'waiting','offset':1,
+    'order':[{'kind':'activity','id':'cmd'}],'progress':{'items':[{'id':'cmd','type':'commandExecution','status':'inProgress'}]}}))
+   events=urllib.request.Request(url+'devices/'+daemon_scope+'/api/turn/'+job_id+'/events',headers=headers)
+   saw_delta=False
+   with urllib.request.urlopen(events,timeout=6) as stream:
+    deadline=time.monotonic()+8
+    for line in stream:
+     assert time.monotonic()<deadline,'daemon event replay did not finish'
+     if not line.startswith(b'data: '):continue
+     job=json.loads(line[6:])
+     if job['status']=='done':break
+     if job['progress']['items'][0].get('output')=='second line':
+      saw_delta=True
+      (app/'finish-command').touch()
+   assert saw_delta and job['status']=='done' and job['offset']==5
+   saved=json.loads(job_file.read_text())
+   assert saved['status']=='done' and saved['answer']=='finished'
+   assert [item['output'] for item in saved['progress']['items']]==['first and second lines']
    assert json.load(urllib.request.urlopen(urllib.request.Request(preview+'ports',headers=headers)))=={'ports':[5173]}
    def open_preview(port,source):
     req=urllib.request.Request(preview+'open',data=json.dumps({'port':port}).encode(),
@@ -120,5 +166,5 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
     except urllib.error.HTTPError as e:assert e.code==403
     with urllib.request.urlopen(urllib.request.Request(url+endpoint,headers={'Cookie':'receiver=isolated-cookie'})) as response:
      assert response.status==200
-   print('APK contents, isolated authorization handoff, loopback listener, protected UI and API routes verified')
+   print('APK contents, authorization handoff, loopback listener, protected routes and daemon command replay verified')
   finally:child.terminate();child.wait()
