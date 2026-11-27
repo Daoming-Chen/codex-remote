@@ -64,6 +64,8 @@ dialog.model-menu::backdrop{background:transparent}
 .side-chat > form button{align-self:flex-end;display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--send);color:var(--on-send)}
 .side-chat > form button svg{width:18px;height:18px}.side-chat > form button:disabled{opacity:.45}
 .side-chat-stop{width:10px;height:10px;background:currentColor;border-radius:2px}
+.side-unread{position:relative}
+.side-unread::before{content:"";position:absolute;left:16px;top:calc(50% - 9px);width:6px;height:6px;border-radius:50%;background:var(--blue,#3981ef);box-shadow:0 0 0 1px var(--bg);pointer-events:none}
 .rail-profile[data-offline]{position:relative}.rail-profile[data-offline]::after{content:'';position:absolute;right:0;bottom:0;width:8px;height:8px;border-radius:50%;background:#ce842c;border:2px solid var(--side)}
 .host-browser{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
 .host-browser form,.preview-ports{display:flex;flex-wrap:wrap;gap:6px;padding:8px}

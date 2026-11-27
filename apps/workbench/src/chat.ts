@@ -965,7 +965,11 @@ function attachedSideChats(owner){
 function sideRecord(chat,index){
   const number=chat.sideChatNumber??(index+1);
   const fallback=number>1?sideChatTab.title+' '+number:sideChatTab.title;
-  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||fallback}
+  return {id:index?'receiver:side-chat:'+chat.id:sideChatTab.id,type:'sideChat',title:chat.messages[0]?.text?.slice(0,36)||fallback,unread:!!chat.unreadReply}
+}
+function markUnreadSideControl(button,title){
+  button.classList.add('side-unread');
+  button.setAttribute('aria-label',title+'，未读回复')
 }
 function createSideChat(owner){
   const list=attachedSideChats(owner);
@@ -1229,7 +1233,11 @@ function renderThreadSummary(chat){
   if(plan)detail.append(planCard(plan));
   if(sideRecords.length){
     detail.append(element('h3','summary-heading','侧边聊天'));
-    for(const record of sideRecords)detail.append(row(record.title,'message-circle',()=>openRecord(record)))
+    for(const record of sideRecords){
+      const button=row(record.title,'message-circle',()=>openRecord(record));
+      if(record.unread)markUnreadSideControl(button,record.title);
+      detail.append(button)
+    }
   }
   if(files.size){
     detail.append(element('h3','summary-heading','文件变更'));
@@ -1302,7 +1310,12 @@ function renderWorkbench(){
   if(!openRecords.length){pane.hidden=true;previousDetail=null;previousTabs='';return}
   const activeRecord=openRecords.some(r=>r.id===view.active)?view.active:openRecords.at(-1).id;
   const tabs=$('work-tabs');
-  const tabState=JSON.stringify([activeRecord,openRecords.map(r=>[r.id,recordTitle(r)])]);
+  const activeSide=sideRecords.get(activeRecord);
+  if(activeSide?.unread&&!document.hidden&&pane.getClientRects().length){
+    const side=sideChats.find((side,index)=>sideRecord(side,index).id===activeRecord);
+    delete side.unreadReply;activeSide.unread=false;save()
+  }
+  const tabState=JSON.stringify([activeRecord,openRecords.map(r=>[r.id,recordTitle(r),!!r.unread])]);
   if(tabState!==previousTabs){
   previousTabs=tabState;tabs.replaceChildren();
   for(const [index,record] of openRecords.entries()){
@@ -1310,6 +1323,7 @@ function renderWorkbench(){
     tab.dataset.record=record.id;
     tab.append(icon(workIcon(record)),element('span','',recordTitle(record)));
     tab.title=recordTitle(record);tab.setAttribute('aria-pressed',String(record.id===activeRecord));
+    if(record.unread)markUnreadSideControl(tab,tab.title);
     function activate(id){
       view.active=id;save();renderWorkbench();
       const selected=tabs.querySelector('.work-tab[aria-pressed="true"]');
@@ -4003,7 +4017,11 @@ async function poll(c,firstAttempt=false){
         const final=c.messages.findLast(m=>m.turn===j.turn&&(m.role==='assistant'||m.role==='status'));
         if(final)final.turnDurationMs=j.turnDurationMs
       }
-      c.parent=id;c.thread=j.thread;c.pending=null;c.error=null}
+      c.parent=id;c.thread=j.thread;c.pending=null;c.error=null;
+      if(j.status==='done'&&!db.chats.includes(c)&&c.messages.some(m=>m.turn===j.turn&&m.role==='assistant'&&m.text)){
+        c.unreadReply=true;
+        if(attachedSideChats(current()).includes(c))renderWorkbench()
+      }}
     else if(j.status==='error'){if(ordered?.length)commitOrderedMessages(c,ordered);c.pending=null;c.receiptUnknown=j.receiptUnknown===true;c.error=j.error||'远端执行失败';
       if(!j.turn&&(j.notSubmitted||/already has an active writer/i.test(c.error))){
         restoreUnsent(c,id);
@@ -4215,6 +4233,7 @@ async function syncArchiveFlags(chats){
 }
 document.addEventListener('visibilitychange',()=>{
   syncThreadWatch();
+  if(!document.hidden&&current()&&attachedSideChats(current()).some(side=>side.unreadReply))renderWorkbench();
   const c=current();
   if(c?.activeTurn&&!c.pending){
     if(document.visibilityState==='visible')void followExternalTurn(c,selectionRevision,true);

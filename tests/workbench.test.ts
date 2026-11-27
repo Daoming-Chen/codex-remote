@@ -648,6 +648,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert.equal(await sideDraft.inputValue(),'侧边草稿');
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).tap();
     await page.locator('.side-chat-history').getByText('侧边处理中',{exact:true}).waitFor();
+    await page.locator('#work-tabs .work-tab').nth(1).tap();
     await page.locator('#work-hide').tap();
     await page.reload();
     sideComplete=true;
@@ -656,7 +657,10 @@ test('show tabs opens one combobox for project files and approved host web apps 
       return owner.sideChats?.some((chat:{messages:{text:string}[]})=>chat.messages.some(m=>m.text==='侧边回复'));
     },'receiver:'+scope+':tim-ser-chat-record:'+thread,{timeout:5000});
     await page.getByRole('button',{name:'显示标签页',exact:true}).tap();
+    const unreadTab=page.getByRole('button',{name:'侧边草稿，未读回复',exact:true});
+    await unreadTab.tap();
     await page.locator('.side-chat-history').getByText('侧边回复',{exact:true}).waitFor();
+    assert.equal(await unreadTab.count(),0);
     assert.equal(sideSubmissions,1);
     assert.equal(await page.locator('#messages').getByText('侧边回复',{exact:true}).count(),0);
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
