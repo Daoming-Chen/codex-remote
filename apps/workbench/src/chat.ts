@@ -4446,21 +4446,25 @@ async function receiverAuthorized(){
   }
   if(!lastDirectorySignature||!$('receiver-setup').hidden)await refreshSidebar()
 }
-let recoveryTimer,recoveryPending=false,recoveryRequested=false,recoveryDelay=1000;
+let recoveryTimer,recoveryPending=null,recoveryDelay=1000;
 const networkReads=new Set();
 const recoveryStatus=element('div','connection-recovery');
 recoveryStatus.setAttribute('role','status');
-async function recoverWorkbenchConnection(){
+async function recoverWorkbenchConnection(replace=false){
   if(!devicePath||document.hidden)return;
+  if(recoveryPending&&replace!==true)return;
   clearTimeout(recoveryTimer);
-  if(recoveryPending){recoveryRequested=true;return}
-  recoveryPending=true;
+  recoveryPending?.abort();
+  const probe=new AbortController();
+  recoveryPending=probe;
+  const timeout=setTimeout(()=>probe.abort(),65000);
   const staleReads=[...networkReads];
   const previousChat=current(),previousHistory=historyRefreshes.get(previousChat);
   recoveryStatus.textContent='正在检查与 '+receiverName+' 的连接…';
   try{
-    const response=await deviceFetch('/api/resume',{method:'POST',signal:AbortSignal.timeout(65000)});
+    const response=await deviceFetch('/api/resume',{method:'POST',signal:probe.signal});
     const result=await response.json();
+    if(recoveryPending!==probe)return;
     if(!response.ok||!result.connected)throw Error(result.error||'连接未恢复');
     const profile=document.querySelector('.rail-profile'),wasOffline=profile.hasAttribute('data-offline');
     recoveryStatus.replaceChildren();delete profile.dataset.offline;recoveryDelay=1000;
@@ -4474,24 +4478,26 @@ async function recoverWorkbenchConnection(){
     if(previousHistory&&historyRefreshes.get(previousChat)===previousHistory)historyRefreshes.delete(previousChat);
     for(const controller of staleReads)controller.abort();
     await Promise.allSettled([firstDirectoryRequest,directoryHeadRequest]);
+    if(recoveryPending!==probe||document.hidden)return;
     const chat=current();
     if(chat?.thread&&!chat.pending)void refreshCurrentHistory(chat);
     void refreshSidebar()
   }catch(error){
-    if(document.hidden||leavingRevokedDevice)return;
+    if(recoveryPending!==probe||document.hidden||leavingRevokedDevice)return;
     const retry=element('button','','立即重试');retry.type='button';retry.onclick=recoverWorkbenchConnection;
     document.querySelector('.rail-profile').dataset.offline='';
     recoveryStatus.replaceChildren(document.createTextNode('正在等待 '+receiverName+' 恢复连接。'),retry);
     recoveryTimer=setTimeout(recoverWorkbenchConnection,recoveryDelay);
     recoveryDelay=Math.min(15000,recoveryDelay*2)
   }finally{
-    recoveryPending=false;
-    if(recoveryRequested){recoveryRequested=false;clearTimeout(recoveryTimer);if(!document.hidden)recoveryTimer=setTimeout(recoverWorkbenchConnection,300)}
+    clearTimeout(timeout);
+    if(recoveryPending===probe)recoveryPending=null
   }
 }
+const resumeCurrentNetwork=()=>recoverWorkbenchConnection(true);
 window.receiverNetworkResumed=()=>{
-  if(!document.hidden)return recoverWorkbenchConnection();
-  document.addEventListener('visibilitychange',recoverWorkbenchConnection,{once:true})
+  if(!document.hidden)return resumeCurrentNetwork();
+  document.addEventListener('visibilitychange',resumeCurrentNetwork,{once:true})
 };
 $('retry-pairing').onclick=async()=>{
   const button=$('retry-pairing');button.disabled=true;$('pairing-status').textContent='正在连接…';

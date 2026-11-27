@@ -211,7 +211,7 @@ test('a timed-out device lookup starts fresh discovery without another Android n
   } finally { await browser.close() }
 });
 
-test('failed network resume retries once, restores the same turn and preserves the unsent draft', async () => {
+for(const superseded of [false,true])test('network recovery restores the same turn and draft, superseded='+superseded, async () => {
   const browser = await launch();
   try {
     const page = await browser.newPage({serviceWorkers:'block',hasTouch:true,viewport:{width:820,height:920}});
@@ -272,12 +272,16 @@ test('failed network resume retries once, restores the same turn and preserves t
     await draft.fill('切网时仍在编辑');
     await page.evaluate(() => { void window.receiverNetworkResumed!() });
     await firstResume;
-    await page.evaluate(() => { void window.receiverNetworkResumed!() });
-    failFirst();
-    await page.locator('.rail-profile[data-offline]').waitFor();
+    if(superseded){
+      await page.evaluate(() => { void window.receiverNetworkResumed!() });
+    }else{
+      failFirst();
+      await page.locator('.rail-profile[data-offline]').waitFor()
+    }
     assert.equal(await page.locator('main .connection-recovery').count(),0);
     await page.locator('#messages').getByText('恢复后收到原轮次的回复',{exact:true}).waitFor();
-    // Cross the first backoff deadline to catch a stale retry after the queued resume.
+    failFirst();
+    // A late failure must not mark the restored connection offline or start another retry.
     await page.waitForTimeout(1200);
     assert.equal(await draft.inputValue(),'切网时仍在编辑');
     assert.equal(await page.locator('.rail-profile[data-offline]').count(),0);
