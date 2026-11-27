@@ -1600,6 +1600,9 @@ function renderWorkbench(){
     function tabMenu(){
       tab.focus({preventScroll:true});
       const body=modal('标签页操作',tab);
+      if(record.type==='sideChat')body.append(row('在侧边聊天中查找','search',()=>{
+        closeDialog();activate(record.id);openThreadFind()
+      }));
       const others=openRecords.filter(r=>r.id!==record.id),right=openRecords.slice(index+1);
       for(const [label,targets,fallback] of [['关闭',[record],openRecords[index+1]?.id||openRecords[index-1]?.id],['关闭其他标签页',others,record.id],['关闭右侧标签页',right,record.id]]){
         const option=row(label,'x',()=>{
@@ -3642,9 +3645,23 @@ function keyboardShortcuts(restore=false){
   setCapture(false);toolbar.append(field,capture);body.append(toolbar,list,empty);
   const heading=body.querySelector('h1');heading.tabIndex=-1;heading.focus({preventScroll:true})
 }
+let lastFindPane=null,closeThreadFind;
+function rememberFindPane(event){
+  const pane=event.target.closest?.('#workbench,#stage');
+  if(pane)lastFindPane=pane
+}
+document.addEventListener('pointerdown',rememberFindPane,true);
+document.addEventListener('focusin',rememberFindPane,true);
 function openThreadFind(){
-  const bar=$('thread-find'),input=$('find-text'),root=$('messages');
-  if(!bar.hidden){input.focus();input.select();return}
+  const bar=$('thread-find'),input=$('find-text'),work=$('workbench');
+  const side=work.querySelector('.side-chat-history');
+  const useSide=side?.getClientRects().length&&(mobile.matches||lastFindPane===work);
+  const root=useSide?side:$('messages'),pane=useSide?side:$('scroller'),parent=useSide?work:$('stage');
+  if(!bar.hidden){
+    if(bar.parentElement===parent){input.focus();input.select();return}
+    closeThreadFind(false)
+  }
+  parent.prepend(bar);
   const previous=document.activeElement,selection=window.getSelection()?.toString();
   bar.hidden=false;if(selection&&selection.length<=256)input.value=selection;
   let ranges=[],active=0,frame=0;
@@ -3671,7 +3688,7 @@ function openThreadFind(){
       if(match.left<bounds.left||match.right>bounds.right)
         output.scrollLeft+=match.left-bounds.left-output.clientWidth/2+Math.min(match.width,output.clientWidth)/2
     }
-    const pane=$('scroller'),box=range.getBoundingClientRect(),viewport=pane.getBoundingClientRect();
+    const box=range.getBoundingClientRect(),viewport=pane.getBoundingClientRect();
     pane.scrollTop+=box.top-viewport.top-viewport.height/2+box.height/2
   }
   function collect(reveal){
@@ -3706,12 +3723,18 @@ function openThreadFind(){
     if(!frame)frame=requestAnimationFrame(()=>{frame=0;collect(false)})
   });
   observer.observe(root,{childList:true,subtree:true,characterData:true});
+  const visibility=useSide?new ResizeObserver(()=>{
+    if(!root.isConnected||!root.getClientRects().length)close(false)
+  }):null;
+  visibility?.observe(root);
   const move=step=>{if(ranges.length){active=(active+step+ranges.length)%ranges.length;render(true)}};
   function close(restore=true){
-    observer.disconnect();cancelAnimationFrame(frame);document.removeEventListener('chat-selected',onSwitch);
+    visibility?.disconnect();observer.disconnect();cancelAnimationFrame(frame);document.removeEventListener('chat-selected',onSwitch);
     bar.hidden=true;input.value='';CSS.highlights?.delete('thread-hits');CSS.highlights?.delete('thread-active');
+    $('stage').prepend(bar);closeThreadFind=null;
     if(restore&&previous?.isConnected)previous.focus({preventScroll:true})
   }
+  closeThreadFind=close;
   const onSwitch=()=>close(false);document.addEventListener('chat-selected',onSwitch);
   input.oninput=()=>{active=0;collect(true)};
   bar.onkeydown=e=>{
