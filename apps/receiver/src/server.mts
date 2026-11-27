@@ -1737,7 +1737,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     json(404,{error:'未找到'})
   }catch(e){
     if(req.url?.startsWith('/api/web-preview/')){
-      if(e.code==='LOOPBACK_PORT_DENIED')return json(403,{code:e.code,error:'请在主机的 Remote 设置中允许此预览端口并保存'});
+      if(e.code==='LOOPBACK_PORT_DENIED')return json(403,{code:e.code,error:'主机尚未允许预览此端口。主机授权后可重新打开。'});
       if(['FEATURE_NOT_SUPPORTED','METHOD_NOT_FOUND','METHOD_NOT_ALLOWED'].includes(e.code))return json(501,{code:e.code,error:'当前主机未提供网页预览'});
       if(e.code==='RATE_LIMITED')return json(429,{code:e.code,error:'主机网页预览已达到连接上限'})
     }
