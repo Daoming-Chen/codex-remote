@@ -203,7 +203,7 @@ async function voiceRequest(req,json){
     if(thread!==null&&(typeof thread!=='string'||!uuid.test(thread))||typeof sdp!=='string'||!sdp.startsWith('v=0')||sdp.length>65536)return json(400,{error:'无效语音提议'});
     if(thread===null){
       if(!setup||!['read-only','workspace-write','danger-full-access'].includes(setup.sandbox)||!['never','untrusted'].includes(setup.approvalPolicy))return json(400,{error:'无效语音任务权限'});
-      if(setup.cwd&&!allowedProjects.has(setup.cwd)||setup.projectId&&!knownProjectIds.has(setup.projectId))return json(400,{error:'请重新从主机加载项目'});
+      if(!await isKnownChatProject(setup.cwd,setup.projectId))return json(400,{error:'请重新从主机加载项目'});
       if(setup.model||setup.effort||setup.serviceTier){
         const model=(await models(setup.cwd||'')).models.find(m=>m.id===setup.model);
         if(!model||(setup.effort&&!model.efforts.includes(setup.effort))||(setup.serviceTier&&setup.serviceTier!=='default'&&!model.serviceTiers?.some(t=>t.id===setup.serviceTier)))return json(400,{error:'无效语音聊天模型配置'})
@@ -576,6 +576,10 @@ async function openHistory(mode,thread){
 let directoryFlight,hasLoadedDirectory=false;
 async function ensureProjectDirectory(){
   if(!hasLoadedDirectory)await firstDirectoryPage()
+}
+async function isKnownChatProject(cwd,projectId){
+  if(cwd||projectId)await ensureProjectDirectory();
+  return (!cwd||allowedProjects.has(cwd))&&(!projectId||knownProjectIds.has(projectId))
 }
 async function firstDirectoryPage(){
   if(!directoryFlight){
@@ -1502,6 +1506,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(term!==undefined&&(thread||typeof term!=='string'||!term.trim()||term.length>180))return json(400,{error:'无效搜索词'});
       if(thread&&!uuid.test(thread)||cursor&&(typeof cursor!=='string'||cursor.length>2048))return json(400,{error:'无效会话'});
       if(projectId!==undefined||projectCwd!==undefined){
+        if(projectId===undefined&&projectCwd)await ensureProjectDirectory();
         const validScope=projectId===undefined?allowedProjects.has(projectCwd):
           projectCwd===undefined&&typeof projectId==='string'&&(knownProjectIds.has(projectId)||uuid.test(projectId));
         if(thread||term!==undefined||!validScope)return json(400,{error:'无效项目'});
@@ -1703,8 +1708,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
           previous=prior.thread;project=prior.cwd
         }
       }else{
-        if(project&&!allowedProjects.has(project))return json(400,{error:'请重新从主机加载项目'});
-        if(projectId&&!knownProjectIds.has(projectId))return json(400,{error:'请重新从主机加载项目'})
+        if(!await isKnownChatProject(project,projectId))return json(400,{error:'请重新从主机加载项目'})
       }
       if(model||effort||serviceTier!=null){
         const catalog=await models(project||'');
