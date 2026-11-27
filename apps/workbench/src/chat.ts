@@ -4124,8 +4124,12 @@ const renderedModelLabels=new WeakMap();
 const observedChats=new WeakMap();
 const foregroundSubmissions=new WeakMap();
 let foregroundRevision=0;
-document.addEventListener('visibilitychange',()=>{if(document.hidden)foregroundRevision++});
-window.addEventListener('pagehide',()=>{foregroundRevision++});
+function leaveForeground(){
+  foregroundRevision++;
+  if(db.chats.some(chat=>chat.pending||(chat.sideChats||(chat.sideChat?[chat.sideChat]:[])).some(side=>side.pending)))save()
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)leaveForeground()});
+window.addEventListener('pagehide',leaveForeground);
 async function poll(c,firstAttempt=false){
   const id=c.pending;if(!id||observedChats.get(c)===id)return;
   observedChats.set(c,id);
