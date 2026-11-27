@@ -1,4 +1,5 @@
 import json
+import base64
 import os
 import signal
 import subprocess
@@ -134,6 +135,18 @@ def local_schedules():
         connection.close()
     return result
 
+def file_range(query, size, version, source, read):
+    offset, length = query.get("offset", 0), query.get("length", 0)
+    if not isinstance(offset, int) or not isinstance(length, int) or not 0 <= offset <= size or not 0 <= length <= 512 * 1024:
+        raise ValueError("文件读取范围无效")
+    if query.get("version") not in (None, version):
+        raise ValueError("读取期间文件发生了变化，请重新打开")
+    data = read(offset, min(size-offset, length)) if length else b""
+    if len(data) != min(size-offset, length):
+        raise ValueError("主机返回的文件不完整")
+    return {"offset":offset, "data":base64.b64encode(data).decode("ascii"), "bytes":size,
+            "version":version, "source":source, "eof":offset+len(data)==size}
+
 def project_working_entry(query, directory):
     import stat
     root, path = query["root"], query["path"]
@@ -159,12 +172,14 @@ def project_working_entry(query, directory):
                     if len(folders) + len(files) > 500: break
             return {"folders": sorted(folders)[:500], "files": sorted(files)[:max(0,500-len(folders))],
                     "truncated":len(folders)+len(files)>500}
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ValueError("仅支持预览普通文本文件")
-        with os.fdopen(fd, "rb", closefd=False) as source:
-            raw = source.read(512*1024+1)
-        if len(raw)>512*1024 or b"\0" in raw: raise ValueError("仅支持预览较短的文本文件")
-        return {"text":raw.decode("utf-8-sig"),"source":"working-tree"}
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("仅支持读取普通文件")
+        version = f"{info.st_dev}:{info.st_ino}:{info.st_ctime_ns}:{info.st_mtime_ns}:{info.st_size}"
+        result = file_range(query, info.st_size, version, "working-tree", lambda start, count: os.pread(fd, count, start))
+        if os.fstat(fd).st_ctime_ns != info.st_ctime_ns:
+            raise ValueError("读取期间文件发生了变化，请重新打开")
+        return result
     finally:
         os.close(fd)
 
@@ -183,12 +198,19 @@ def project_file_snapshot(query):
     if mode not in (b"100644", b"100755") or stage != b"0" or name != os.fsencode(relative):
         raise ValueError("此条目无法作为文本预览")
     blob = oid.decode("ascii")
-    if int(subprocess.check_output(git + ["cat-file", "-s", blob])) > 256 * 1024:
-        raise ValueError("文件超过 256 KiB 预览上限")
-    data = subprocess.check_output(git + ["cat-file", "blob", blob])
-    if b"\0" in data:
-        raise ValueError("此文件不是 UTF-8 文本")
-    return {"text":data.decode("utf-8-sig"), "version":blob}
+    size = int(subprocess.check_output(git + ["cat-file", "-s", blob]))
+    def read(start, count):
+        with subprocess.Popen(git + ["cat-file", "blob", blob], stdout=subprocess.PIPE) as proc:
+            try:
+                while start:
+                    skipped = proc.stdout.read(min(start, 65536))
+                    if not skipped: raise ValueError("Git 暂存区版本不完整")
+                    start -= len(skipped)
+                return proc.stdout.read(count)
+            finally:
+                proc.stdout.close()
+                proc.terminate()
+    return file_range(query, size, blob, "git-index", read)
 
 try:
     if proc:
@@ -357,7 +379,15 @@ try:
             turn_start = len(messages)
             for item in turn.get("items", []):
                 if item["type"] == "userMessage":
-                    text = "\n".join(c.get("text","") for c in item.get("content", []) if c["type"]=="text")
+                    parts = []
+                    for content in item.get("content", []):
+                        if content.get("type") == "text":
+                            parts.append(content.get("text", ""))
+                        elif content.get("type") == "localImage":
+                            path = content.get("path")
+                            if isinstance(path, str) and path and not any(ord(c)<32 or ord(c)==127 for c in path):
+                                parts.append("上传附件（主机文件）："+path)
+                    text = "\n".join(parts)
                     images = [c["url"] for c in item.get("content", []) if c.get("type")=="image" and isinstance(c.get("url"),str) and c["url"].startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,"))]
                     if text or images: messages.append({"role":"user","turn":turn["id"],"text":text,"images":images,"clientId":item.get("clientId")})
                 elif item["type"] == "agentMessage" and item.get("text"):

@@ -1,5 +1,6 @@
 import { renderWorkbenchPage } from '../apps/receiver/src/workbench-page.mts';
 import { searchDirectoryFiles } from '../apps/workbench/src/PanelSearch.ts';
+import {fileChunks, fileMime, filePreview, filePreviewLimit} from '../apps/receiver/src/project-file-content.mts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -7,6 +8,189 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Route } from 'playwright-core';
+
+test('project file ranges preserve bytes, detect concurrent writes and inspect image signatures', async()=>{
+  const zipHeader=Buffer.from([80,75,3,4]);
+  assert.equal(fileMime('build/Android.APK',zipHeader),'application/vnd.android.package-archive');
+  assert.equal(fileMime('build/archive.zip',zipHeader),'application/zip');
+  const original=Buffer.alloc(filePreviewLimit+25,127);
+  original.write('GIF89a');
+  const info={bytes:original.length,source:'working-tree',version:'v1'};
+  const read=async(offset:number,length:number)=>({...info,offset,eof:offset+length===original.length,
+    data:original.subarray(offset,offset+length).toString('base64')});
+  const preview=await filePreview('renamed.pdf',info,read);
+  assert.equal(preview.mime,'image/gif');
+  assert.equal('data' in preview,false);
+  const chunks=[];
+  for await(const part of fileChunks(info,read))chunks.push(part);
+  assert.deepEqual(Buffer.concat(chunks),original);
+  await assert.rejects(async()=>{
+    for await(const part of fileChunks(info,async(offset,length)=>({...await read(offset,length),version:offset?'v2':'v1'})))assert(part.length);
+  },/发生了变化/);
+});
+
+for(const side of [false,true])test('upload originals and restore attachment previews on tablet, side='+side,async()=>{
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
+  try{
+    const page=await browser.newPage({hasTouch:true,viewport:{width:960,height:900},serviceWorkers:'block'});
+    page.setDefaultTimeout(6000);
+    const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
+    const origin='http://localhost:49025',cwd='/home/project',scope='b'.repeat(64),base='/devices/'+scope;
+    const mainThread='00000000-0000-4000-8000-000000000025',sideThread='00000000-0000-4000-8000-000000000026';
+    const expectedThread=side?sideThread:mainThread,tab='receiver:side-chat';
+    const key='receiver:'+scope+':tim-ser-chats-v2';
+    await page.addInitScript(({mainThread,sideThread,cwd,side,key,tab})=>{
+      if(localStorage.getItem(key))return;
+      const owner={id:mainThread,thread:mainThread,cwd,title:'附件',draft:'',files:[],messages:[]};
+      if(side)Object.assign(owner,{sideChats:[{...owner,id:sideThread,thread:sideThread}],workView:{ids:[tab],active:tab}});
+      localStorage.setItem(key,JSON.stringify({active:owner.id,chats:[owner]}))
+    },{mainThread,sideThread,cwd,side,key,tab});
+    const template=await readFile(assets+'/index.html','utf8'),chunks=new Map<string,Buffer>();
+    const binary=Buffer.alloc(150000,0x9e);binary[0]=0;
+    const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/llKiZcAAAAASUVORK5CYII=','base64');
+    const drawing=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="5"/></svg>');
+    let loseReceipt=true;
+    await page.route(origin+'/**',async route=>{
+      const url=new URL(route.request().url()),path=url.pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{deviceName:'主机',scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/capabilities')return route.fulfill({json:{attachmentUpload:true}});
+      if(path===base+'/api/attachments/upload'){
+        const q=url.searchParams,name=q.get('name')!,offset=Number(q.get('offset')),total=Number(q.get('total'));
+        const bytes=route.request().postDataBuffer()||Buffer.alloc(0);
+        assert.equal(q.get('thread'),expectedThread);
+        const old=chunks.get(name)||Buffer.alloc(0);
+        const saved=offset===old.length?Buffer.concat([old,bytes]):old;
+        chunks.set(name,saved);
+        if(loseReceipt){loseReceipt=false;return route.abort('failed')}
+        return route.fulfill({json:saved.length===total?
+          {complete:true,offset:total,size:total,name,path:cwd+'/.attachments/'+name,root:cwd}:{complete:false,offset:saved.length}})
+      }
+      if(path===base+'/api/turn')return route.fulfill({json:{id:route.request().postDataJSON().id}});
+      if(path===base+'/api/threads'&&route.request().postDataJSON()?.thread)return route.fulfill({json:{thread:expectedThread,cwd,messages:[]}});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],projects:[],models:[],native:false}});
+      return route.fulfill({path:assets+path})
+    });
+    await page.goto(origin+base+'/');
+    const composer=page.locator(side?'.side-chat form':'#composer');
+    const picker=side?composer.locator('input[type=file]'):page.locator('#file');
+    await picker.setInputFiles([
+      {name:'设计稿.psd',mimeType:'application/octet-stream',buffer:binary},
+      {name:'平板.png',mimeType:'image/png',buffer:image},
+      {name:'线稿.svg',mimeType:'image/svg+xml',buffer:drawing},
+      {name:'empty.bin',mimeType:'application/octet-stream',buffer:Buffer.alloc(0)}
+    ]);
+    await composer.getByRole('button',{name:'打开主机文件 empty.bin'}).waitFor();
+    assert.deepEqual(chunks.get('设计稿.psd'),binary);assert.deepEqual(chunks.get('平板.png'),image);assert.deepEqual(chunks.get('线稿.svg'),drawing);
+    await page.reload();
+    await composer.getByRole('button',{name:'查看线稿.svg'}).waitFor();
+    await composer.getByRole('button',{name:'查看平板.png'}).tap();
+    await page.locator('#dialog.image-viewer img').waitFor();
+    await page.locator('#dialog [data-action=close]').tap();
+    const submission=page.waitForRequest(request=>request.url()===origin+base+'/api/turn');
+    await composer.getByRole('button',{name:side?'发送':'发送消息',exact:true}).tap();
+    const data=(await submission).postDataJSON();
+    assert.equal(data.expectedThread,expectedThread);
+    for(const name of ['设计稿.psd','平板.png','线稿.svg','empty.bin'])assert(data.prompt.includes(cwd+'/.attachments/'+name));
+    assert.equal(data.images.length,2);
+    const history=page.locator(side?'.side-chat-history':'#messages');
+    await history.getByRole('button',{name:'打开主机文件 设计稿.psd'}).waitFor();
+    await history.getByRole('button',{name:'查看图片附件'}).first().tap();
+    await page.locator('#dialog.image-viewer img').waitFor();
+  }finally{await browser.close()}
+});
+
+test('tablet goal composer creates a host goal, preserves failed drafts and confirms replacement',async()=>{
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
+  try{
+    const page=await browser.newPage({hasTouch:true,viewport:{width:980,height:800},serviceWorkers:'block'});
+    const assets=process.env.WORKBENCH_ASSET_DIR??fileURLToPath(new URL('../web/',import.meta.url));
+    const origin='http://localhost:49019',thread='c0ffee00-0000-4000-8000-000000000001';
+    let supported=false,loseReceipt=true,ordinaryTurns=0;
+    let confirmReplacement:(()=>void)|undefined;
+    let goal:{objective:string,status:string,createdAt:number,timeUsedSeconds:number,updatedAt:number,tokensUsed:number,tokenBudget:number|null}|null=null;
+    const requests:any[]=[];
+    const template=await readFile(assets+'/index.html','utf8');
+    await page.route(origin+'/**',async route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path==='/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{deviceName:'主机',scope:'',version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path==='/api/capabilities')return route.fulfill({json:{goalMode:supported}});
+      if(path==='/api/thread-goal'){
+        const request=route.request().postDataJSON();requests.push(request);
+        goal={objective:request.objective,status:'active',createdAt:100,timeUsedSeconds:60,updatedAt:Math.floor(Date.now()/1000),
+          tokensUsed:500,tokenBudget:request.thread?2000:null};
+        if(loseReceipt){loseReceipt=false;return route.abort('failed')}
+        if(request.thread)await new Promise<void>(resolve=>{confirmReplacement=resolve});
+        return route.fulfill({json:{thread,goal}})
+      }
+      if(path==='/api/turn')ordinaryTurns++;
+      if(path==='/api/threads'&&route.request().postDataJSON()?.thread)return route.fulfill({json:{thread,goal,messages:[]}});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:assets+path})
+    });
+    await page.goto(origin);
+    const prompt=page.locator('#prompt');
+    await prompt.fill('/go');
+    await page.getByRole('option',{name:/^\/goal/}).tap();
+    assert.equal(await prompt.inputValue(),'');
+    assert.match(await prompt.getAttribute('placeholder')||'',/可衡量/);
+    const goalButton=page.getByRole('button',{name:'退出目标模式',exact:true});
+    for(const viewport of [{width:800,height:1100},{width:980,height:800}]){
+      await page.setViewportSize(viewport);
+      const parts=await Promise.all([
+        goalButton,goalButton.locator('i svg'),goalButton.locator('span'),goalButton.locator('.goal-dismiss'),page.locator('#attach-menu')
+      ].map(part=>part.boundingBox()));
+      const center=(box:NonNullable<typeof parts[number]>)=>box.y+box.height/2;
+      const [button,target,label,dismiss,attach]=parts;
+      assert(button&&target&&label&&dismiss&&attach);
+      assert.equal(target.width,16);
+      assert.equal(target.height,16);
+      assert(target.x+target.width<=label.x && label.x+label.width<=dismiss.x);
+      for(const part of [target,label,dismiss,attach])assert(Math.abs(center(part)-center(button))<=1);
+    }
+    await goalButton.tap();
+    await page.locator('#attach-menu').tap();
+    await page.getByRole('menuitem',{name:'目标',exact:true}).tap();
+    assert.match(await prompt.getAttribute('placeholder')||'',/可衡量/);
+    await prompt.fill('检查平板布局');
+    await page.locator('#send').tap();
+    await page.getByText('当前主机连接不支持设置目标。草稿已保留。',{exact:true}).waitFor();
+    assert.equal(await prompt.inputValue(),'检查平板布局');
+    supported=true;
+    await page.locator('#send').tap();
+    await page.waitForFunction(()=>!(document.querySelector('#send') as HTMLButtonElement).disabled);
+    await page.reload();
+    assert.equal(await prompt.inputValue(),'检查平板布局');
+    await page.locator('#send').tap();
+    await page.locator('#goal-objective').getByText('检查平板布局').waitFor();
+    assert.match(await page.locator('#goal-time').innerText(),/^1m/);
+    assert.equal(requests.length,2);
+    assert.deepEqual(requests[0],requests[1]);
+    assert.equal(requests[0].expected,null);
+    assert.equal(requests[0].activate,true);
+    assert.equal(await prompt.inputValue(),'');
+    await prompt.fill('/goal 验证横屏');
+    await page.locator('#send').tap();
+    await page.getByRole('button',{name:'取消',exact:true}).tap();
+    assert.equal(requests.length,2);
+    assert.equal(await prompt.inputValue(),'验证横屏');
+    await page.locator('#send').tap();
+    const replacing=page.waitForRequest(request=>request.url()===origin+'/api/thread-goal');
+    await page.getByRole('button',{name:'替换目标',exact:true}).tap();
+    await replacing;
+    assert.equal(await page.locator('#model-picker').isDisabled(),true);
+    assert.equal(await page.locator('[data-action=permissions]').isDisabled(),true);
+    await prompt.fill('保留后续问题');
+    await prompt.press('Enter');
+    confirmReplacement!();
+    await page.locator('#goal-objective').getByText('验证横屏').waitFor();
+    assert.equal(await page.locator('#goal-time').innerText(),'500 / 2000');
+    assert.equal(await prompt.inputValue(),'保留后续问题');
+    assert.equal(await page.locator('#goal-mode').isHidden(),true);
+    assert.deepEqual(requests[2].expected,{objective:'检查平板布局',status:'active',createdAt:100});
+    assert.equal(requests[2].thread,thread);
+    assert.equal(ordinaryTurns,0)
+  }finally{await browser.close()}
+});
 
 test('tablet account usage shows remaining quota graphically and refreshes after a failed read',async()=>{
   const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
@@ -105,8 +289,11 @@ test('side chat keeps its opening mode and routes plan questions to its own turn
     await sideModels.tap();
     await page.locator('.model-view-toggle').tap();
     await page.getByRole('menuitemradio',{name:'charlie',exact:true}).tap();
-    await page.locator('.speed-trigger').tap();
-    await page.getByRole('menuitemradio',{name:'标准',exact:true}).tap();
+    const sideSpeed=page.getByRole('menuitemcheckbox',{name:'启用快速模式',exact:true});
+    await sideSpeed.tap();
+    await page.getByRole('menuitemcheckbox',{name:'启用标准模式',exact:true}).tap();
+    assert.equal(await sideSpeed.getAttribute('aria-checked'),'false');
+    assert.equal(await page.locator('.speed-flyout').count(),0);
     await page.keyboard.press('Escape');
     assert.match(await sideModels.innerText(),/charlie/);
     assert.match(await page.locator('#model-picker').innerText(),/bravo/);
@@ -252,6 +439,22 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.keyboard.press('Control+Alt+b');
     assert(await page.locator('#workbench').isHidden());
     const draft = page.locator('#prompt');
+    await draft.fill('/');
+    const suggestions = page.getByRole('listbox', {name: '命令'});
+    assert.deepEqual(await suggestions.getByRole('option').allTextContents(), [
+      '/model　选择模型', '/goal　设置要持续追求的目标', '/plan　计划模式',
+    ]);
+    await draft.press('ArrowDown');
+    assert.equal(await draft.getAttribute('aria-activedescendant'), 'goal-command-option');
+    await draft.press('Escape');
+    assert(await suggestions.isHidden());
+    assert.equal(await draft.inputValue(), '/');
+    await draft.fill('正文 /mo');
+    await draft.press('Tab');
+    await page.getByRole('textbox', {name: '搜索模型'}).waitFor();
+    await page.keyboard.press('Escape');
+    assert.equal(await draft.inputValue(), '正文 ');
+    assert.equal(turnRequests, 0);
     await draft.fill('/model');
     await draft.press('Enter');
     const modelSearch = page.getByRole('textbox', { name: '搜索模型' });
@@ -273,6 +476,7 @@ test('select an authorized host, preview and remove attachments, retain the draf
     const retiring = page.getByRole('menuitemradio', {name: 'Model bravo'});
     assert.equal(await retiring.locator('.model-default-description').innerText(), '将于1月1日下线');
     assert.match(await retiring.getAttribute('aria-description') || '', /下线 · 主机模型说明/);
+    assert.equal(await page.getByRole('menuitemradio', {name: 'Model delta'}).innerText(), 'Model delta');
     assert.equal(await page.getByRole('menuitemradio', {name: 'Model delta'}).getAttribute('aria-checked'), 'true');
     await retiring.click();
     assert.match(await page.locator('.model-view-name').innerText(), /bravo/);
@@ -280,16 +484,16 @@ test('select an authorized host, preview and remove attachments, retain the draf
     await page.getByRole('menuitemradio', {name: '默认',exact: true}).click();
     assert.match(await page.locator('.model-view-name').innerText(), /alpha/);
     const speed = page.locator('.speed-trigger');
-    await speed.press('ArrowDown');
-    await page.keyboard.press('End');
-    await page.keyboard.press('Enter');
-    assert.match(await speed.getAttribute('aria-label') || '', /快速/);
+    assert.equal(await speed.getAttribute('role'),'menuitemcheckbox');
+    assert.equal(await speed.getAttribute('aria-label'),'启用快速模式');
+    await speed.press('Enter');
+    assert.equal(await speed.getAttribute('aria-checked'),'true');
+    assert.equal(await speed.getAttribute('aria-label'),'启用标准模式');
     assert(await speed.evaluate(el => el === document.activeElement));
-    await speed.click();
-    await page.getByRole('menuitemradio', {name: '沿用主机设置'}).click();
-    assert.match(await speed.getAttribute('aria-label') || '', /沿用主机设置/);
-    await speed.click();
-    await page.keyboard.press('Escape');
+    await speed.press('Space');
+    assert.equal(await speed.getAttribute('aria-checked'),'false');
+    assert.equal(await speed.getAttribute('aria-label'),'启用快速模式');
+    assert.equal(await page.locator('.speed-flyout').count(),0);
     assert(await speed.evaluate(el => el === document.activeElement));
     const effort = page.getByRole('slider', { name: '强度' });
     await effort.evaluate(input => {
@@ -524,7 +728,7 @@ test('restore a streaming turn after sending on another device with the same thr
 });
 
 for (const [mode,tier,expectedTier] of [
-  ['daemon','Fast','priority'],['native','Ultrafast','ultrafast'],['native','标准','default'],['legacy','Ultrafast',null],
+  ['daemon','快速','priority'],['native','超快','ultrafast'],['native','标准','default'],['legacy','超快',null],
 ] as const) test('touch selection sends the model and effort shown by the tablet composer · ' + mode + ' · ' + tier, async () => {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH
     ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'msedge' });
@@ -561,6 +765,7 @@ for (const [mode,tier,expectedTier] of [
           efforts: ['low', 'medium', 'high'], defaultEffort: 'low'})), defaults: {model: 'alpha', effort: 'low',serviceTier:'ultrafast'},
       }});
       if (path === base + '/api/native-capability') return route.fulfill({json: {native: mode !== 'daemon'}});
+      if (path === base + '/api/capabilities') return route.fulfill({json: {autoReview: mode !== 'legacy', fullAccess: true}});
       if (path === base + '/api/turn') return route.fulfill({json: {id: route.request().postDataJSON().id}});
       if (path.includes('/api/')) return route.fulfill({json: {items: [], projects: [], models: []}});
       return route.fulfill({path: directory + path});
@@ -568,7 +773,12 @@ for (const [mode,tier,expectedTier] of [
     await page.goto(origin + base + '/');
     if (mode !== 'daemon') {
       await page.locator('[data-action=permissions]').tap();
-      await page.getByRole('button', {name: '工作区写入（按需审批）', exact: true}).tap();
+      await page.getByRole('button', {name: '完全访问权限', exact: true}).tap();
+      await page.getByRole('button', {name: '取消', exact: true}).tap();
+      const review = page.getByRole('button', {name: '帮我批准', exact: true});
+      assert.equal(await review.isDisabled(), mode === 'legacy');
+      if (mode === 'legacy') await page.getByRole('button', {name: '请求批准', exact: true}).tap();
+      else await review.tap();
     }
     await page.locator('#model-picker').tap();
     await page.locator('.model-view-toggle').tap();
@@ -578,19 +788,34 @@ for (const [mode,tier,expectedTier] of [
     assert(box);
     await slider.tap({position: {x: box.width - 6, y: box.height / 2}});
     assert.equal(await slider.inputValue(), '2');
-    await page.locator('.speed-trigger').tap();
-    if (mode === 'native') {
-      const flyout = page.locator('dialog.speed-flyout[open]');
+    const speed = page.locator('.speed-trigger');
+    const choice = page.getByRole('menuitemradio', {name: tier,exact:true});
+    if (mode !== 'legacy') {
+      await speed.tap();
+      const flyout = page.locator(mode==='native'?'dialog.speed-flyout[open]':'.speed-flyout:popover-open');
       await flyout.waitFor();
+      const options=flyout.getByRole('menuitemradio');
+      assert.deepEqual(await options.evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label'))),['标准','快速','超快']);
+      const checked=flyout.getByRole('menuitemradio',{checked:true});
+      assert.equal(await checked.count(),1);
+      assert((await speed.getAttribute('aria-label'))?.includes((await checked.getAttribute('aria-label'))!));
       await page.setViewportSize({width:780,height:540});
       await page.waitForFunction(() => {
-        const panel = document.querySelector('dialog.speed-flyout')!.getBoundingClientRect();
-        const anchor = document.querySelector('.speed-trigger')!.getBoundingClientRect();
-        const side = anchor.left - 8 >= panel.width + 4 ? anchor.left - panel.width - 4 : anchor.right + 4;
-        return panel.width>0 && Math.abs(panel.left - Math.max(8,Math.min(side,innerWidth - 8 - panel.width)))<2 &&
+        const panel = document.querySelector('.speed-flyout')!.getBoundingClientRect();
+        const parent = document.querySelector('#dialog')!.getBoundingClientRect();
+        const rightFits=innerWidth-parent.right>=panel.width+16;
+        const leftFits=parent.left>=panel.width+16;
+        const onExpectedSide=rightFits?panel.left>=parent.right-1:leftFits?panel.right<=parent.left+1:true;
+        return onExpectedSide && panel.width>0 && panel.left>=7 && panel.right<=innerWidth-7 &&
           panel.top>=7 && panel.bottom<=innerHeight-7;
       });
-      await page.touchscreen.tap(2,2);
+      // Tapping the parent menu dismisses the speed choices without losing the model picker.
+      if(mode==='native')await page.touchscreen.tap(2,2);
+      else {
+        const dialogBounds=await page.locator('#dialog').boundingBox();
+        assert(dialogBounds);
+        await page.touchscreen.tap(dialogBounds.x+dialogBounds.width/2,dialogBounds.y+dialogBounds.height-4);
+      }
       await flyout.waitFor({state:'hidden'});
       assert(await page.locator('#dialog').isVisible());
       await page.locator('.speed-trigger[aria-expanded=false]').waitFor();
@@ -599,19 +824,38 @@ for (const [mode,tier,expectedTier] of [
       assert(handled);
       await flyout.waitFor({state:'hidden'});
       assert(await page.locator('.speed-trigger').evaluate(el=>el===document.activeElement));
-      await page.locator('.speed-trigger').press('ArrowDown');
-      await flyout.press('Escape');
+      await speed.press('ArrowDown');
+      await page.keyboard.press('End');
+      assert(await options.last().evaluate(el=>el===document.activeElement));
+      await page.keyboard.press('Home');
+      assert(await options.first().evaluate(el=>el===document.activeElement));
+      await page.keyboard.press('Escape');
       await flyout.waitFor({state:'hidden'});
       assert(await page.locator('#dialog').isVisible());
+      assert(await speed.evaluate(el=>el===document.activeElement));
       await page.setViewportSize({width:960,height:720});
-      await page.locator('.speed-trigger').tap();
-    }
-    const choice = page.getByRole('menuitemradio', {name: tier,exact:true});
-    if (mode === 'legacy') {
-      assert(await choice.isDisabled());
-      await page.getByRole('menuitemradio', {name:'沿用主机设置'}).tap();
-    } else {
+      if(mode==='daemon'){
+        await speed.hover();
+        await flyout.waitFor();
+        await options.last().hover();
+        await page.mouse.move(2,2);
+        await flyout.waitFor({state:'hidden'});
+        assert(await page.locator('#dialog').isVisible());
+      }
+      await speed.press('ArrowRight');
+      await page.keyboard.press('Home');
+      await page.keyboard.press('Enter');
+      await flyout.waitFor({state:'hidden'});
+      assert((await speed.getAttribute('aria-label'))?.includes('标准'));
+      assert(await speed.evaluate(el=>el===document.activeElement));
+      await speed.tap();
       await choice.tap();
+      await flyout.waitFor({state:'hidden'});
+      assert((await speed.getAttribute('aria-label'))?.includes(tier));
+      assert(await speed.evaluate(el=>el===document.activeElement));
+    } else {
+      assert(await speed.isDisabled());
+      assert.equal(await page.locator('.speed-flyout').count(),0);
     }
     await page.reload();
     if (mode !== 'legacy') {
@@ -629,6 +873,7 @@ for (const [mode,tier,expectedTier] of [
     await page.locator('#send').tap();
     const payload = (await submitted).postDataJSON();
     assert.equal(payload.serviceTier,expectedTier);
+    if (mode !== 'daemon') assert.equal(payload.sandbox, mode === 'legacy' ? 'remote-workspace' : 'auto-review');
     assert.deepEqual([payload.model, payload.effort, payload.prompt], ['bravo', 'high', '测试模型选择']);
     assert.deepEqual(errors.map(e=>e.message),[]);
   } finally { await browser.close() }
@@ -658,11 +903,24 @@ test('browse the selected host project and read nested working files on a tablet
       if (path === base + '/api/project-directories') {
         const {relative,workspace} = route.request().postDataJSON();
         assert.equal(workspace,root);
-        return route.fulfill({json:{folders:relative ? [] : ['src'],files:relative ? ['note.txt','README.MD'] : []}});
+        return route.fulfill({json:{folders:relative ? [] : ['src'],files:relative ? ['note.txt','README.MD','art.png','report.pdf'] : []}});
       }
       if (path === base + '/api/project-file-snapshot') {
         snapshot = route.request().postDataJSON();
+        const name=route.request().postDataJSON().path;
+        if(name.endsWith('.png')){
+          const data=await readFile(directory+'/codex.png');
+          return route.fulfill({json:{source:'working-tree',mime:'image/png',bytes:data.length,version:'image-1',data:data.toString('base64')}});
+        }
+        if(name.endsWith('.pdf'))return route.fulfill({json:{source:'working-tree',mime:'application/pdf',bytes:17,version:'pdf-1'}});
         return route.fulfill({json:{source:'working-tree', text:route.request().postDataJSON().path.endsWith('.MD')?markdown:'今天的工作区内容 <b>文本</b>'}});
+      }
+      if(path===base+'/api/project-file-download'){
+        const request=route.request().postDataJSON();
+        assert.equal(request.path,root+'\\src\\report.pdf');
+        assert.equal(request.workingTree,true);
+        assert.equal(request.version,snapshot?'pdf-1':undefined);
+        return route.fulfill({contentType:'application/pdf',body:'%PDF-1.4\n%%EOF'});
       }
       if (path.includes('/api/')) return route.fulfill({json:{native:true, items:[],projects:[],models:[]}});
       return route.fulfill({path:directory + path});
@@ -680,6 +938,20 @@ test('browse the selected host project and read nested working files on a tablet
     await page.getByRole('button',{name:'新建标签页',exact:true}).tap();
     await page.locator('#dialog').getByRole('button',{name:'文件资源管理器',exact:true}).tap();
     await page.locator('.project-explorer-tree summary').filter({hasText:'src'}).tap();
+    const directDownload=page.waitForEvent('download');
+    await page.getByRole('button',{name:'下载 report.pdf',exact:true}).tap();
+    const directFile=await directDownload;
+    assert.equal(directFile.suggestedFilename(),'report.pdf');
+    assert.equal(await readFile((await directFile.path())!,'utf8'),'%PDF-1.4\n%%EOF');
+    assert.equal(snapshot,undefined);
+    await page.evaluate(()=>{
+      Object.assign(window,{ReceiverFiles:{save:(name:string,mime:string,payload:string)=>{
+        sessionStorage.setItem('savedFile',JSON.stringify({name,...JSON.parse(payload)}));
+      }}});
+    });
+    await page.getByRole('button',{name:'下载 report.pdf',exact:true}).tap();
+    const saved=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('savedFile')!));
+    assert.deepEqual(saved,{name:'report.pdf',root,path:root+'\\src\\report.pdf',workspace:root,workingTree:true});
     await page.getByRole('button',{name:'note.txt',exact:true}).tap();
     await page.locator('.project-explorer-reader pre').waitFor();
     assert.equal(await page.locator('.project-explorer-reader pre').innerText(),'今天的工作区内容 <b>文本</b>');
@@ -688,6 +960,14 @@ test('browse the selected host project and read nested working files on a tablet
     await page.locator('.project-explorer-reader pre').waitFor();
     await page.getByRole('button',{name:'返回文件列表',exact:true}).tap();
     assert(await page.getByRole('button',{name:'note.txt',exact:true}).isVisible());
+    await page.getByRole('button',{name:'art.png',exact:true}).tap();
+    await page.waitForFunction(()=> (document.querySelector('.project-image') as HTMLImageElement)?.naturalWidth>0);
+    await page.getByRole('button',{name:'返回文件列表',exact:true}).tap();
+    await page.getByRole('button',{name:'report.pdf',exact:true}).tap();
+    const downloaded=page.waitForEvent('download');
+    await page.getByRole('button',{name:'保存文件',exact:true}).tap();
+    assert.equal((await downloaded).suggestedFilename(),'report.pdf');
+    await page.getByRole('button',{name:'返回文件列表',exact:true}).tap();
     await page.getByRole('button',{name:'README.MD',exact:true}).tap();
     const preview=page.locator('.project-markdown');
     await preview.getByRole('heading',{name:'说明'}).waitFor();

@@ -1,0 +1,51 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -94698,6 +94698,22 @@
+     searchTerm: external_exports.string().max(1024).optional()
+   }).strict(),
+   "thread/read": external_exports.object({ threadId: id3, includeTurns: external_exports.boolean().optional() }).strict(),
++  "thread/goal/get": external_exports.object({ threadId: id3 }).strict(),
++  "thread/goal/set": external_exports.object({
++    threadId: id3,
++    origin: external_exports.literal("user"),
++    objective: external_exports.string().trim().min(1).max(131072).optional(),
++    status: external_exports.enum(["active", "paused"]).optional()
++  }).strict(),
++  "thread/goal/clear": external_exports.object({ threadId: id3, origin: external_exports.literal("user") }).strict(),
++  "thread/settings/update": external_exports.object({
++    threadId: id3,
++    permissionPreset,
++    approvalsReviewer: external_exports.enum(["user", "auto_review"]),
++    model: external_exports.string().min(1).max(128).optional(),
++    effort: external_exports.enum(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
++    serviceTier: external_exports.enum(["priority", "ultrafast"]).nullable().optional()
++  }).strict(),
+   "dsh/sessionHistory": external_exports.object({
+     threadId: id3,
+     beforeSeq: external_exports.number().int().nonnegative().optional(),
+@@ -95896,6 +95912,25 @@
+     if (threadId !== void 0) {
+       this.rememberThread(connectionId, threadId);
+       if (allowedThread !== void 0) this.rememberThreadMeta(threadId, allowedThread.thread, allowedThread.cwd);
++    }
++    if (call.method === "thread/settings/update" || call.method === "thread/goal/set" || call.method === "thread/goal/clear") {
++      const owner = this.turnOwners.get(threadId);
++      const peerDeviceId = this.peerDeviceIds.get(connectionId) ?? connectionId;
++      if (owner !== void 0 && owner.connectionId !== connectionId && owner.peerDeviceId !== peerDeviceId) {
++        throw new RpcError("CODEX_THREAD_BUSY", "Another Remote client is writing to this CodeX thread.");
++      }
++      if (call.method === "thread/settings/update") {
++        if (this.hasPendingApprovalForThread(threadId)) {
++          throw new RpcError("CODEX_THREAD_BUSY", "Resolve pending CodeX approvals before changing permissions.");
++        }
++        const permission = codexPermission(call.params);
++        const result = await this.callUpstream(call.method, {
++          ...permission.params, ...codexTurnPermissionParams(permission, allowedThread?.cwd)
++        });
++        assertCurrent();
++        await this.publishPermission(threadId, codexTurnPermissionParams(permission, allowedThread?.cwd));
++        return result;
++      }
+     }
+     if (call.method === "thread/resume" && call.params.permissionPreset !== void 0) {
+       const owner = this.turnOwners.get(threadId);

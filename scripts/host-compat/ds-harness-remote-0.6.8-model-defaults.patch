@@ -1,0 +1,39 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -94698,6 +94698,9 @@
+     searchTerm: external_exports.string().max(1024).optional()
+   }).strict(),
+   "thread/read": external_exports.object({ threadId: id3, includeTurns: external_exports.boolean().optional() }).strict(),
++  "dsh/modelDefaults": external_exports.object({
++    cwd: external_exports.string().min(1).max(4096).optional()
++  }).strict(),
+   "dsh/attachmentUpload": external_exports.object({
+     id: external_exports.string().uuid(),
+     threadId: id3.optional(),
+@@ -95922,6 +95925,17 @@
+       this.rememberThread(connectionId, threadId);
+       if (allowedThread !== void 0) this.rememberThreadMeta(threadId, allowedThread.thread, allowedThread.cwd);
+     }
++    if (call.method === "dsh/modelDefaults") {
++      const cwd = call.params.cwd === void 0 ? void 0 : await this.requireCodexWorkspacePath(call.params.cwd);
++      assertCurrent();
++      const { config } = await this.callUpstream("config/read", { cwd, includeLayers: false });
++      assertCurrent();
++      return {
++        model: typeof config.model === "string" ? config.model : null,
++        effort: typeof config.model_reasoning_effort === "string" ? config.model_reasoning_effort : null,
++        serviceTier: typeof config.service_tier === "string" ? config.service_tier : null
++      };
++    }
+     if (call.method === "dsh/attachmentUpload") {
+       const cwd = threadId === void 0 ? call.params.cwd : allowedThread?.cwd;
+       const root = await this.requireCodexWorkspacePath(cwd);
+@@ -96060,7 +96074,7 @@
+           await this.publishPermission(threadId, codexTurnPermissionParams(permission, allowedThread?.cwd));
+         }
+       }
+-      if (call.method === "model/list") return { ...result, remoteServiceTierForTurn: true, remoteApprovalsReviewerForTurn: true, remoteGoalMode: true, remoteAttachmentUpload: true };
++      if (call.method === "model/list") return { ...result, remoteServiceTierForTurn: true, remoteApprovalsReviewerForTurn: true, remoteGoalMode: true, remoteAttachmentUpload: true, remoteModelDefaults: true };
+       return result;
+     } catch (error62) {
+       finishStart?.(errorCode2(error62) === "CODEX_REQUEST_TIMEOUT");

@@ -39,6 +39,7 @@ await writeFile(resolve(root, 'web/receiver-worker.js'),
 await build({
   absWorkingDir: root, entryPoints: ['apps/workbench/src/markdown.ts'],
   outfile: 'web/markdown.js', bundle: true, minify: true, target: browserTarget,
+  banner: {js: '/*! Marked\n' + await readFile(resolve(root, 'node_modules/marked/LICENSE'), 'utf8') + '*/'},
 });
 // All supported WebViews have WOFF2. Embed those fonts so formulas also work offline.
 const katexDist = resolve(root, 'node_modules/katex/dist');

@@ -1,0 +1,36 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -99732,9 +99732,32 @@
+       const absolutePath = target3;
+       const version2 = `${info.mtimeMs}:${info.size}`;
+       if (endpoint === "workspaceFiles/stat") {
+-        return { ok: true, value: { absolutePath, version: version2, bytes: info.size } };
++        return { ok: true, value: { absolutePath, version: version2, bytes: info.size, rangeDownload: info.isFile(), rangeVersion: `${info.dev}:${info.ino}:${info.ctimeMs}:${version2}` } };
+       }
+       if (!info.isFile()) throw this.scopeError("WORKSPACE_INVALID_PATH", "The requested workspace path is not a file.");
++      const range = byteOrLineRange(args);
++      if (endpoint === "workspaceFiles/readBytes" && Number.isSafeInteger(range.length) && range.length > 0 && range.length <= 512 * 1024) {
++        if (info.size > 64 * 1024 * 1024) throw this.scopeError("WORKSPACE_TOO_LARGE", "The requested workspace file is too large.");
++        const offset = readOffset(args);
++        if (offset > info.size) throw this.scopeError("WORKSPACE_CHANGED", "The requested file range has changed.");
++        const handle = await open4(target3, "r");
++        try {
++          const unchanged = (value) => value.isFile() && value.dev === info.dev && value.ino === info.ino && value.ctimeMs === info.ctimeMs && value.mtimeMs === info.mtimeMs && value.size === info.size;
++          if (!unchanged(await handle.stat())) throw this.scopeError("WORKSPACE_CHANGED", "The workspace file changed while opening it.");
++          const bytes = Buffer.alloc(Math.min(range.length, info.size - offset));
++          let length = 0;
++          while (length < bytes.length) {
++            signal.throwIfAborted();
++            const { bytesRead } = await handle.read(bytes, length, bytes.length - length, offset + length);
++            if (!bytesRead) break;
++            length += bytesRead;
++          }
++          if (length !== bytes.length || !unchanged(await handle.stat())) throw this.scopeError("WORKSPACE_CHANGED", "The workspace file changed while reading it.");
++          return { ok: true, value: { absolutePath, version: version2, rangeVersion: `${info.dev}:${info.ino}:${info.ctimeMs}:${version2}`, bytes: info.size, offset, eof: offset + length === info.size, data: bytes.toString("base64") } };
++        } finally {
++          await handle.close();
++        }
++      }
+       if (info.size > MAX_READ_BYTES) throw this.scopeError("WORKSPACE_TOO_LARGE", "The requested workspace file is too large.");
+       const offset2 = readOffset(args);
+       const limit = readLimit(args);

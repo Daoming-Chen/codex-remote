@@ -181,8 +181,10 @@ try {
      const gateway=new RemoteTypertGateway(remote.client);
      context.listWorkspaceFiles=(thread,path)=>gateway.invoke({namespace:'workspaceFiles',method:'list',
        args:{workspaceFileScopeId:'codex:'+thread,path},signal:AbortSignal.timeout(15000)})
-     context.readWorkspaceFile=(thread,path)=>gateway.invoke({namespace:'workspaceFiles',method:'read',
-       args:{workspaceFileScopeId:'codex:'+thread,path,offset:0,limit:512*1024},signal:AbortSignal.timeout(15000)})
+     context.workspaceFileStat=(thread,path)=>gateway.invoke({namespace:'workspaceFiles',method:'stat',
+       args:{workspaceFileScopeId:'codex:'+thread,path},signal:AbortSignal.timeout(15000)})
+     context.workspaceFileRange=(thread,path,offset,length)=>gateway.invoke({namespace:'workspaceFiles',method:'readBytes',
+       args:{workspaceFileScopeId:'codex:'+thread,path,options:{range:{offset,length}}},signal:AbortSignal.timeout(30000)})
    }
    return context
  }
@@ -222,7 +224,7 @@ export async function openRemote(relay=false){
   try{return await opening}
   catch(error){if(connection===opening)connection=null;throw error}
 }
-export async function* remoteLines(code,events=false,relay=false,onComplete,cancel,onStart){
+export async function* remoteLines(code,events=false,relay=false,onComplete,cancel,onStart,inputBase64){
   const opening=openRemote(relay);
   const ctx=await opening;
   if(ctx.nativeCodex)throw Error('此设备通过原生 Codex 接口连接，当前操作尚未适配');
@@ -246,7 +248,8 @@ export async function* remoteLines(code,events=false,relay=false,onComplete,canc
       if(!sent&&f.info?.controllerId===attachmentId&&f.info?.state==='running'&&(f.type==='snapshot'||f.type==='state')){
         const stamp=onStart?' "$(date +%s%3N)"':'';
         sent=true;sentAt=Date.now();
-        await call('terminal/write',{agentId:sid,id,attachmentId,data:'echo '+marker+'_START'+stamp+'; '+code+'; echo '+marker+'_DONE\r'});
+        const configure=inputBase64?'stty -echo; ':'',restore=inputBase64?'stty echo; ':'';
+        await call('terminal/write',{agentId:sid,id,attachmentId,data:configure+'echo '+marker+'_START'+stamp+'; '+code+'; '+restore+'echo '+marker+'_DONE\r'});
         writeConfirmedAt=Date.now()
       }
       if(f.type!=='output')continue;
@@ -255,6 +258,14 @@ export async function* remoteLines(code,events=false,relay=false,onComplete,canc
         const line=buf.slice(0,end).replace(/\r/g,'').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g,'');buf=buf.slice(end+1);
         if(!reading&&(line===marker+'_START'||onStart&&line.startsWith(marker+'_START '))){
           reading=true;
+          if(inputBase64){
+            // Canonical terminals accept at most 4095 bytes per line. Feed the
+            // waiting reader in bounded RPC writes, then signal EOF at BOL.
+            const lines=inputBase64.match(/.{1,1024}/g);
+            for(let i=0;i<lines.length;i+=24)
+              await call('terminal/write',{agentId:sid,id,attachmentId,data:lines.slice(i,i+24).join('\r')+'\r'});
+            await call('terminal/write',{agentId:sid,id,attachmentId,data:'\x04'})
+          }
           const stamp=line.slice(marker.length+7);
           onStart?.(ctx.transportMode(),/^\d{13}$/.test(stamp)?{sentAt,writeConfirmedAt,hostAt:Number(stamp),receivedAt:Date.now()}:null,ctx.transportMode);
           continue

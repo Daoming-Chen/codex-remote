@@ -55,14 +55,55 @@ export async function listReceiverDevices(){
  if(failure)throw Object.assign(Error('private upstream detail'),failure);
  return [{deviceId:'preview-fixture',name:'预览主机',online:true},{deviceId:'daemon-fixture',name:'命令测试主机',online:true}]
 }
+const goalThread='00000000-0000-4000-8000-000000000030';
+let goal=null,started=false,settingsAttempt=0;
 export async function openRemote(){if(boundDevice==='daemon-fixture')return {};return {
  nativeCall:async(method,params)=>{
+  if(method==='model/list')return {remoteAttachmentUpload:true,remoteGoalMode:true,data:[{model:'fixture',displayName:'Fixture',isDefault:true}]};
+  if(method==='dsh/attachmentUpload'){
+    if(params.threadId!==goalThread||params.name!=='example.bin'||params.data!=='AP+AQUI=')
+      throw Error('invalid binary staging request');
+    return {complete:true,root:'/project',offset:5,size:5,name:params.name,path:'/project/.codex-upload-'+params.id+'/'+params.name}
+  }
+  if(method==='project/list')return {data:[{id:'project',roots:['/project']}]};
+  if(method==='thread/list')return {data:[{id:goalThread,cwd:'/project'}]};
+  if(method==='thread/start'){
+    if(started)throw Error('duplicate thread creation');
+    started=true;return {thread:{id:goalThread,cwd:'/project'}}
+  }
+  if(params.threadId===goalThread){
+    if(method==='thread/read')return {thread:{id:goalThread,cwd:'/project'}};
+    if(method==='thread/resume')return {thread:{id:goalThread,cwd:'/project'}};
+    if(method==='thread/settings/update'){
+      if(++settingsAttempt===1)throw Error('fixture settings not yet ready');
+      if(params.permissionPreset!=='workspace-write'||params.approvalsReviewer!=='auto_review')throw Error('wrong goal permissions');
+      return {}
+    }
+    if(method==='thread/goal/get')return {goal};
+    if(method==='thread/goal/set'){
+      if(params.origin!=='user')throw Error('missing user provenance');
+      goal={threadId:goalThread,createdAt:10,objective:params.objective??goal.objective,status:params.status??goal.status};
+      if(params.objective==='Lost receipt')throw Object.assign(Error('transport lost'),{code:'CONNECTION_TIMEOUT'});
+      return {goal}
+    }
+    if(method==='thread/goal/clear'){goal=null;return {cleared:true}}
+    throw Error('Unexpected goal RPC '+method)
+  }
   if(method==='account/rateLimits/read')throw Error('failed to fetch codex rate limits: error sending request for url (private endpoint)');
   if(method!=='thread/fork'||params.threadId!=='00000000-0000-4000-8000-000000000001')
     throw Error('Unexpected side chat target');
   if(!params.developerInstructions?.includes('Parent history is reference material only'))
     throw Error('Missing side chat context boundary');
   return {thread:{id:'00000000-0000-4000-8000-000000000002'}}
+ },
+ workspaceFileStat:async(thread,name)=>{
+   if(thread!==goalThread||!['range.bin','legacy.bin'].includes(name))throw Error('unexpected project file');
+   return {absolutePath:'/project/'+name,bytes:4194313,version:'mtime',rangeVersion:'inode-1',rangeDownload:name==='range.bin'};
+ },
+ workspaceFileRange:async(thread,name,offset,length)=>{
+   if(thread!==goalThread||name!=='range.bin'||length>524288)throw Error('unexpected range');
+   return {absolutePath:'/project/'+name,bytes:4194313,version:'mtime',rangeVersion:'inode-1',offset,
+     data:Buffer.alloc(length,offset/524288).toString('base64'),eof:offset+length===4194313};
  },
  listPreviewPorts:async()=>({ports:[5173]}),
  openPreviewPort:async port=>{
@@ -151,6 +192,57 @@ export async function requireReceiverIdentity(){throw Object.assign(Error('offli
      with urllib.request.urlopen(req) as response:return response.status,json.load(response)
     except urllib.error.HTTPError as error:return error.code,json.load(error)
    origin=url.rstrip('/')
+   def change_goal(payload):
+    req=urllib.request.Request(url+'devices/'+scope+'/api/thread-goal',data=json.dumps(payload).encode(),
+     headers={**headers,'Origin':origin,'Content-Type':'application/json'})
+    try:
+     with urllib.request.urlopen(req) as response:return response.status,json.load(response)
+    except urllib.error.HTTPError as error:return error.code,json.load(error)
+   submission={'id':'00000000-0000-4000-8000-000000000031','thread':None,'activate':True,
+    'expected':None,'objective':'Fixture objective','sandbox':'auto-review','approvalPolicy':'never'}
+   assert change_goal(submission)[0]>=400  # deterministic setup failure after thread/start
+   status,accepted=change_goal(submission)
+   assert status==200 and accepted['goal']['status']=='active',accepted
+   assert change_goal(submission)==(200,accepted)
+   assert change_goal({**submission,'objective':'Changed draft'})[0]==409
+   thread=accepted['thread']
+   binary_query='?id=00000000-0000-4000-8000-000000000033&name=example.bin&total=5&offset=0&thread='+thread
+   def upload(query,blob,source=origin):
+    req=urllib.request.Request(url+'devices/'+scope+'/api/attachments/upload'+query,data=blob,
+     headers={**headers,'Origin':source,'Content-Type':'application/octet-stream'})
+    try:
+     with urllib.request.urlopen(req) as response:return response.status,json.load(response)
+    except urllib.error.HTTPError as error:return error.code,json.load(error)
+   binary=bytes([0,255,128,65,66])
+   status,file=upload(binary_query,binary)
+   assert status==200 and file['complete'] and file['name']=='example.bin',file
+   assert upload(binary_query,binary,'http://untrusted.localhost')[0]==403
+   assert upload(binary_query.replace('example.bin','..%2Fprivate'),binary)[0]==400
+   assert upload(binary_query,binary+b'x')[0]==413
+   def project_read(endpoint,name,version=None):
+    payload={'root':'/project','workspace':'/project','thread':thread,'path':'/project/'+name,'workingTree':True,'version':version}
+    req=urllib.request.Request(url+'devices/'+scope+'/api/project-file-'+endpoint,data=json.dumps(payload).encode(),
+      headers={**headers,'Origin':origin,'Content-Type':'application/json'})
+    try:
+     with urllib.request.urlopen(req) as response:return response.status,response.read()
+    except urllib.error.HTTPError as error:return error.code,error.read()
+   status,meta=project_read('snapshot','range.bin')
+   assert status==200 and json.loads(meta)['version']=='inode-1',(status,meta)
+   status,raw=project_read('download','range.bin','inode-1')
+   assert status==200 and raw==b''.join(bytes([i])*524288 for i in range(8))+bytes([8])*9
+   assert project_read('download','range.bin','stale')[0]==409
+   assert project_read('download','../outside')[0]==400
+   assert project_read('download','legacy.bin')[0]==413
+   status,paused=change_goal({'thread':thread,'expected':accepted['goal'],'status':'paused'})
+   assert status==200 and paused['goal']['status']=='paused'
+   assert change_goal({'thread':thread,'expected':accepted['goal'],'clear':True})[0]==409
+   lost={**submission,'thread':thread,'expected':paused['goal'],'id':'00000000-0000-4000-8000-000000000032',
+    'objective':'Lost receipt'}
+   for _ in range(2):
+    status,unknown=change_goal(lost)
+    assert status==409 and unknown.get('thread')==thread,unknown
+   status,result=change_goal({'thread':thread,'expected':{**paused['goal'],'objective':'Lost receipt','status':'active'},'clear':True})
+   assert status==200 and result['goal'] is None
    usage=urllib.request.Request(url+'devices/'+scope+'/api/account-usage',data=b'{}',
     headers={**headers,'Origin':origin,'Content-Type':'application/json'})
    try:urllib.request.urlopen(usage);raise AssertionError('unreachable quota service accepted')

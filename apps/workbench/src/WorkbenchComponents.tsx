@@ -32,4 +32,4 @@ export { renderModelSearch } from './models/ModelSearch.js';
 export { renderEffortControl } from './models/EffortControl.js';
 export { renderSpeedMenu, speedMenuOpen, dismissSpeedMenu } from './models/SpeedMenu.js';
 export { renderModelOptions, clearModelOptions } from './models/ModelOptions.js';
-export { permissionLabel, renderPermissionChoices } from './PermissionChoices.js';
+export { permissionIcon, permissionLabel, renderPermissionChoices } from './PermissionChoices.js';

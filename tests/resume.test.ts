@@ -16,6 +16,198 @@ function launch() {
   return chromium.launch(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {channel:'msedge'});
 }
 
+test('context window ring follows the desktop setting and rounded tooltip threshold', async()=>{
+  const browser=await launch();
+  try {
+    const page=await browser.newPage({hasTouch:true,viewport:{width:960,height:720},serviceWorkers:'block'});
+    await page.addInitScript(scope=>{
+      const key='receiver:'+scope+':tim-ser-chats-v2';
+      if(localStorage.getItem(key))return;
+      const chat={id:'usage',title:'用量测试',draft:'',files:[],messages:[{role:'assistant',text:'测试回复'}],
+        usage:{total:25500,contextWindow:100000}};
+      localStorage.setItem(key,JSON.stringify({active:chat.id,chats:[chat]}));
+    },host.scope);
+    const template=await readFile(resolve(assets,'index.html'),'utf8');
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],models:[],projects:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    await page.goto(origin+base+'/');
+    const ring=page.locator('#usage-button'),tooltip=page.getByRole('tooltip');
+    assert(await ring.isHidden());
+    await page.getByRole('button',{name:'设置',exact:true}).click();
+    const setting=page.getByRole('switch',{name:'显示上下文使用情况'});
+    assert(!(await setting.isChecked()));
+    await setting.check();
+    await page.goBack();
+    await ring.waitFor();
+    await page.reload();
+    await ring.waitFor();
+    assert.equal(await ring.innerText(),'');
+    assert.equal(await ring.getAttribute('aria-label'),'上下文用量：26%');
+    assert.equal(await ring.locator('#context-usage-arc').getAttribute('stroke-dashoffset'),'74.5');
+    await ring.hover();
+    assert.match(await tooltip.innerText(),/26% 已用（剩余 74%）/);
+    assert.match(await tooltip.innerText(),/已用 26k 标记，共 100k/);
+    await page.mouse.move(1,1);
+    await tooltip.waitFor({state:'hidden'});
+    await ring.tap();
+    type UsageWindow=typeof window & {renderContextUsage:(usage:{total:number;contextWindow:number})=>void};
+    await page.evaluate(()=> (window as UsageWindow).renderContextUsage({total:49500,contextWindow:100000}));
+    assert.match(await tooltip.innerText(),/50% 已用/);
+    assert.doesNotMatch(await tooltip.innerText(),/剩余/);
+    await page.evaluate(()=> (window as UsageWindow).renderContextUsage({total:150000,contextWindow:100000}));
+    assert.match(await tooltip.innerText(),/100% 已用/);
+    assert.match(await tooltip.innerText(),/已用 100k 标记，共 100k/);
+    await page.keyboard.press('Escape');await tooltip.waitFor({state:'hidden'});
+    await page.evaluate(()=> (window as UsageWindow).renderContextUsage({total:20,contextWindow:0}));
+    assert(await ring.isHidden());
+  }finally{await browser.close()}
+});
+
+test('desktop Markdown lexer keeps streaming blocks, literal code and safe links', async () => {
+  const browser=await chromium.launch(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{channel:'msedge'});
+  try {
+    const page=await browser.newPage();
+    await page.addScriptTag({path:resolve(assets,'markdown.js')});
+    const reply=await readFile(new URL('./fixtures/tablet-reply.md',import.meta.url),'utf8');
+    const rendered=await page.evaluate(reply=>{
+      const blocks=window.renderMarkdownBlocks(reply);
+      const div=document.createElement('div');
+      div.innerHTML=blocks.join('');
+      const strong=Array.from(div.querySelectorAll('strong'),item=>item.textContent);
+      const example='\x60**「示例」**正文\x60';
+      const literalCode=window.renderMarkdown(example);
+      div.innerHTML=window.renderMarkdown('<svg onload="alert(1)"></svg> [隐藏](java&#x73;cript:x) ![图](https://example.test/p.png) https://example.test/');
+      return {blockCount:blocks.length,same:blocks.join('')===window.renderMarkdown(reply),strong,literalCode,
+        literalOpen:window.renderMarkdownBlocks('**「未结束').join(''),activeMarkup:div.querySelectorAll('svg,img,script').length,
+        links:Array.from(div.querySelectorAll('a'),link=>link.href)}
+    },reply);
+    assert.equal(rendered.blockCount,3);
+    assert.equal(rendered.same,true);
+    assert.deepEqual(rendered.strong,['先别刷新或关闭平板上的页面。','「浏览器存储已满，当前对话只保存在此页面」','「沿用主机设置」','默认速度是 Ultrafast（极速）','闪电图标']);
+    assert.match(rendered.literalCode,/<code>\*\*「示例」\*\*正文<\/code>/);
+    assert.match(rendered.literalOpen,/\*\*「未结束/);
+    assert.equal(rendered.activeMarkup,0);
+    assert.deepEqual(rendered.links,['https://example.test/p.png','https://example.test/']);
+  } finally { await browser.close() }
+});
+
+test('a local Markdown image loads from its project and opens at original size', async () => {
+  const browser=await launch();
+  try {
+    const page=await browser.newPage({hasTouch:true,serviceWorkers:'block'});
+    const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS0kAAAAASUVORK5CYII=';
+    const cwd='C:/work/demo';
+    await page.addInitScript(({scope,cwd})=>{
+      const chat={id:'local-image',cwd,title:'图片',draft:'',files:[],messages:[{role:'assistant',text:'![设计稿](assets/ui.png)\n\n[安装包](/C:/work/demo/build/app.apk)'}]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:chat.id,chats:[chat]}))
+    },{scope:host.scope,cwd});
+    await page.route(origin+'/**',async route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(await readFile(resolve(assets,'index.html'),'utf8'),{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path.endsWith('/api/project-file-snapshot')){
+        const args=route.request().postDataJSON();
+        assert.equal(args.root,cwd);assert.equal(args.workspace,cwd);assert.equal(args.path.replaceAll('\\','/'),cwd+'/assets/ui.png');
+        return route.fulfill({json:{mime:'image/png',data:png,version:'png-1',source:'working-tree'}});
+      }
+      if(path.endsWith('/api/project-file-download')){
+        const args=route.request().postDataJSON();
+        assert.equal(args.workspace,cwd);assert.equal(args.workingTree,true);
+        if(args.path.endsWith('.png')){
+          assert.equal(args.version,'png-1');
+          return route.fulfill({body:Buffer.from(png,'base64')});
+        }
+        assert.equal(args.path,cwd+'/build/app.apk');
+        return route.fulfill({body:Buffer.from('PK')});
+      }
+      if(path.includes('/api/'))return route.fulfill({json:{items:[],projects:[],models:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    await page.goto(origin+base+'/');
+    await page.getByRole('img',{name:'设计稿'}).tap();
+    await page.locator('#dialog .image-viewport img').waitFor();
+    assert.equal(await page.locator('#dialog .image-viewport img').evaluate(el=>(el as HTMLImageElement).naturalWidth),1);
+    for(const name of ['ui.png','app.apk']){
+      if(name==='app.apk'){
+        await page.keyboard.press('Escape');
+        await page.getByRole('link',{name:'安装包'}).tap();
+      }
+      const downloaded=page.waitForEvent('download');
+      await page.getByRole('button',{name:'保存文件',exact:true}).tap();
+      assert.equal((await downloaded).suggestedFilename(),name);
+    }
+  } finally {await browser.close()}
+});
+
+test('restored Chinese reply keeps desktop Markdown spacing at tablet widths', async () => {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({hasTouch:true, serviceWorkers:'block'});
+    const reply = await readFile(new URL('./fixtures/tablet-reply.md', import.meta.url), 'utf8');
+    await page.addInitScript(({scope, reply}) => {
+      const chat = {id:'markdown', title:'Markdown 排版', draft:'', files:[], messages:[{role:'assistant', text:reply}]};
+      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2', JSON.stringify({active:chat.id, chats:[chat]}));
+    }, {scope:host.scope, reply});
+    const template = await readFile(resolve(assets,'index.html'), 'utf8');
+    await page.route(origin+'/**', route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === base+'/') return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
+        deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if (path.includes('/api/')) return route.fulfill({json:{items:[],projects:[],models:[]}});
+      return route.fulfill({path:resolve(assets,path.slice(1))});
+    });
+    await page.goto(origin+base+'/');
+    const answer = page.locator('#messages .answer');
+    await answer.waitFor();
+    assert.equal(await answer.locator('ul > li').count(), 2);
+    assert.equal(await answer.locator('a.chat-file-link[href^="/C:/"]').count(), 3);
+    assert.deepEqual(await answer.locator('a.chat-file-link').allTextContents(), [
+      '本地保存代码 (line 119)', '主机连接实现 (line 306)', '主机配置 (line 6)',
+    ]);
+    assert.deepEqual(await answer.locator('a.chat-file-link use').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('href'))),
+      ['/icons.svg#file-typescript','/icons.svg#file-reference','/icons.svg#file-config']);
+    const external = answer.locator('a[href^="https://"]');
+    assert.equal(await external.count(), 1);
+    assert.equal(await external.evaluate(el => getComputedStyle(el).textDecorationStyle), 'dotted');
+    for (const width of [768, 960]) {
+      await page.setViewportSize({width,height:800});
+      const metrics = await answer.evaluate(el => {
+        const list = el.querySelector('ul')!;
+        const first = el.querySelector('p')!, last = el.querySelector('ul + p')!;
+        return {
+          tags:Array.from(el.children, child => child.tagName),
+          font:parseFloat(getComputedStyle(el).fontSize),
+          lineHeight:parseFloat(getComputedStyle(el).lineHeight),
+          listIndent:parseFloat(getComputedStyle(list).paddingInlineStart),
+          bullets:getComputedStyle(list).listStyleType,
+          beforeList:list.getBoundingClientRect().top-first.getBoundingClientRect().bottom,
+          afterList:last.getBoundingClientRect().top-list.getBoundingClientRect().bottom,
+          itemIndent:parseFloat(getComputedStyle(list.children[0]).paddingInlineStart),
+          bold:getComputedStyle(el.querySelector('strong')!).fontWeight,
+          marker:getComputedStyle(list.children[0],'::marker').fontWeight,
+          overflows:el.scrollWidth > el.clientWidth,
+        };
+      });
+      assert.deepEqual(metrics.tags, ['P','UL','P']);
+      assert.equal(metrics.bold, '600');
+      assert.equal(metrics.marker, '600');
+      assert.equal(metrics.lineHeight, metrics.font * 1.625);
+      assert.equal(metrics.listIndent, metrics.lineHeight);
+      assert.equal(metrics.bullets, 'disc');
+      assert.equal(metrics.itemIndent, metrics.font * .375);
+      assert.equal(metrics.beforeList, metrics.font / 4);
+      assert.equal(metrics.afterList, metrics.font / 2);
+      assert.equal(metrics.overflows, false);
+    }
+    assert.equal(await answer.locator('strong').count(), 5);
+  } finally { await browser.close(); }
+});
+
 for(const side of [false,true])test('streamed Markdown finalizes TeX and preserves literal code, side='+side,async()=>{
   const browser=await launch();
   try{
@@ -292,6 +484,21 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       assert.equal(await timeline.locator('.command-output').innerText(),'remote-');
       assert.equal(await timeline.getByText('执行中',{exact:true}).count(),1)
     }
+    if(!side){
+      const primary=page.locator('#send'),field=page.locator('#prompt');
+      assert.equal(await primary.getAttribute('aria-label'),'停止当前任务');
+      await field.fill('补充当前任务');
+      assert.equal(await primary.getAttribute('aria-label'),'发送消息');
+      await page.route(origin+base+'/api/steer/'+job,route=>{
+        const payload=route.request().postDataJSON();
+        assert.equal(payload.turn,'original-turn');
+        assert.equal(payload.text,'补充当前任务');
+        return route.fulfill({json:{turn:payload.turn}})
+      });
+      await primary.click();
+      await page.getByRole('button',{name:'停止当前任务',exact:true}).waitFor();
+      assert.equal(await field.inputValue(),'')
+    }
     holdUpdates=true;
     await page.reload({waitUntil:'domcontentloaded'});
     await messages.getByText('已收到的第二段',{exact:true}).waitFor({timeout:4000});
@@ -322,17 +529,19 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       const beforeFinal={parentReads,branchReads};
       const panel=page.locator('.side-chat'),field=panel.locator('textarea');
       await field.fill('侧聊补充');
-      const supplement=panel.getByRole('button',{name:'补充要求',exact:true});
+      const supplement=panel.getByRole('button',{name:'发送',exact:true});
+      assert.equal(await panel.getByRole('button',{name:'停止',exact:true}).count(),0);
       await supplement.click();
       await page.getByText('主机暂时未确认',{exact:true}).waitFor();
       assert.equal(await field.inputValue(),'侧聊补充');
-      await supplement.click();await supplement.waitFor({state:'hidden'});
+      await field.press('Control+Enter');await supplement.waitFor({state:'hidden'});
       assert.equal(await field.inputValue(),'');assert.equal(sharedAttempts,2);
       await field.fill('保留侧聊草稿');
-      await field.press('Control+Enter');
+      assert.equal(await supplement.count(),1);
+      await field.fill('');
       assert.equal(externalDone,false);
       await panel.getByRole('button',{name:'停止',exact:true}).click();
-      assert.equal(await field.inputValue(),'保留侧聊草稿');
+      assert.equal(await field.inputValue(),'');
       await messages.getByText('跨端最终回复',{exact:true}).waitFor();
       assert(branchReads>beforeFinal.branchReads);
       assert.equal(parentReads,beforeFinal.parentReads);

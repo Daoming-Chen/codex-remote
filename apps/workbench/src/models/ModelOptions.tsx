@@ -18,6 +18,7 @@ function Option({ option, command }: {option: ModelOption; command: boolean}) {
   const retirement = date && Number.isFinite(date.getTime())
     ? '将于' + date.toLocaleDateString('zh-CN', {month: 'long', day: 'numeric', timeZone: 'UTC'}) + '下线' : '';
   const details = [retirement, option.description, option.tier].filter(Boolean).join(' · ');
+  const subtitle = retirement || (option.projectDefault ? option.description : '');
   return <button type="button" class="modal-row" role="menuitemradio" aria-label={option.name}
     aria-checked={option.checked} aria-description={details || undefined} disabled={option.disabled}
     data-project-default={option.projectDefault ? '' : undefined} data-model-id={option.modelId}
@@ -25,7 +26,7 @@ function Option({ option, command }: {option: ModelOption; command: boolean}) {
     onClick={option.select}>
     {option.shortcut && <kbd class="recent-key">{option.shortcut}</kbd>}
     <span class="model-option-label"><span class="model-option-name" title={option.name}>{option.name}</span>
-      {(retirement || option.description) && <span class="model-default-description">{retirement || option.description}</span>}
+      {subtitle && <span class="model-default-description">{subtitle}</span>}
     </span>
     {option.checked && !command && <svg aria-hidden="true"><use href="/icons.svg#check" /></svg>}
     {option.tier && <small class="recent-tier">{option.tier}</small>}

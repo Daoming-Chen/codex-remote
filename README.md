@@ -48,9 +48,31 @@ Android 选定主机后默认开启「后台保持连接」，通过系统前台
 
 `npm run typecheck` 严格检查组件、设备协议与目录服务、Markdown 适配、听写控制器、录音处理器、离线恢复页、构建脚本和浏览器测试。esbuild 将工作台浏览器脚本编译为 Chromium 83 支持的语法。Android 11 模拟器的 WebView 83 已使用模拟主机验证选择设备、打开聊天、收发消息和回到前台后重新连接。运行 `npm run test:ui` 可在 Edge 中验证同名设备选择、图片预览、草稿恢复，以及流式回复期间切换设备再返回的行为；其他 Chromium 安装可用 `CHROMIUM_PATH` 指定可执行文件。
 
+## 在平板和主机之间交换文件
+
+在主聊天或侧聊打开「＋ → 添加本地文件」，从 Android 系统文件选择器选择文件。支持上传的主机会把原文件保存到当前项目下独立的 `.codex-upload-<编号>` 目录。发送消息时附上主机路径，Codex 可以按该轮的任务权限读取文件。原文件保留在主机项目中，删除平板草稿里的附件不会删除主机副本。每个文件最多 64 MiB。
+
+在文件资源管理器中，点击文件名可预览，点右侧的下载按钮可直接保存到平板。聊天回复中的项目 APK、PDF 或压缩包链接，以及点开的项目图片，也提供「保存文件」。Android 会弹出系统文件选择器，保存后可用已安装的应用打开。原生主机上的任意格式上传和超过 4 MiB 的下载需要新版的 ds-harness-remote 0.6.8 兼容包，单个下载文件上限为 64 MiB。
+
+## 查看上下文窗口
+
+在设置中开启「显示上下文使用情况」。主机返回用量后，输入框旁会出现一个圆环。点按圆环可查看已用比例和 token 用量。四舍五入后的已用比例低于 50% 时，详情还会显示剩余百分比。该设置默认关闭。
+
+## 在平板上设置目标和任务权限
+
+在主聊天输入框旁点「＋」并选择「目标」，或输入 `/goal` 并点选命令。写下目标后发送。已有目标的聊天会显示目标卡，可以查看、编辑、暂停、继续或清除目标。替换进行中的目标需要确认。主机暂时无法接受目标时，平板会保留草稿。
+
+权限菜单中的「请求批准」由你决定是否允许需要审批的操作。「帮我批准」使用主机的自动审批。「完全访问权限」需要再次确认。通过原生接口连接的主机需要下方的兼容插件才能启用目标和自动审批。旧插件的能力会显示在平板界面上。
+
+### 复查桌面端交互
+
+`npm run test:ui` 会在安装了商店版 Codex 的 Windows 上读取桌面端版本，并与上次核对的版本比较。版本变化时，测试会列出需要重新核对的入口。触摸和键盘测试覆盖斜杠命令、创建及替换目标、模型、推理强度、速度、权限选择，以及主聊天和侧聊运行中的发送和停止。Markdown 样例覆盖含中文引号的加粗、项目文件链接和列表排版。
+
+构建 APK 后可用 `python tests/android_markdown.py emulator-5554 reply.png` 在独立的模拟器 WebView 中渲染样例并保存截图。将设备编号替换为实际模拟器编号，构建环境沿用下方 Android 配置，可通过 `ADB` 指定 adb 可执行文件。测试从 APK 读取工作台资源，使用独立测试应用和模拟会话数据。
+
 ## 在原生主机上选择模型速度
 
-在模型与推理强度菜单里点闪电图标，选择当前模型提供的 Fast 或 Ultrafast。接收端会记住当前聊天的选择，并在每次发送时传给主机。「标准」使用标准速度，「沿用主机设置」使用主机上的会话配置。
+打开模型与推理强度菜单。如果模型只提供标准和快速两档，点闪电图标即可在两者之间切换。如果模型还提供超快等档位，点图标会展开速度列表。首次打开时显示当前生效的速度；手动选择后，接收端会记住当前聊天的选择，并在发送时传给主机。
 
 通过 Codex 原生接口连接的主机需要支持 `turn/start.serviceTierForTurn`。原版 ds-harness-remote 0.6.8 能列出模型速度，但其接口会拒绝逐轮指定速度。连接这类主机时，速度菜单会标明只能沿用主机设置。
 
@@ -58,14 +80,14 @@ Android 选定主机后默认开启「后台保持连接」，通过系统前台
 
 ```powershell
 $plugin = Join-Path $env:USERPROFILE '.dsh/profiles/desktop/node_modules/ds-harness-remote'
-python scripts/host-compat/package_plugin.py $plugin dist/ds-harness-remote-0.6.8-codex-speed.tgz
+python scripts/host-compat/package_plugin.py $plugin dist/ds-harness-remote-0.6.8-codex-files.tgz
 ```
 
 构建脚本只在临时副本中应用补丁。要让 Windows 主机使用兼容包，等主机当前任务结束后完全退出 DeepSeek Harness，再通过其自带的 `dsh.cmd` 安装到 `desktop` 配置。安装完成后重新打开 DeepSeek Harness。
 
 ```powershell
 $dsh = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-$package = (Resolve-Path 'dist/ds-harness-remote-0.6.8-codex-speed.tgz').Path
+$package = (Resolve-Path 'dist/ds-harness-remote-0.6.8-codex-files.tgz').Path
 & $dsh plugin --profile desktop add -w $package
 ```
 

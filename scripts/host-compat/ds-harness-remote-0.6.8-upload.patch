@@ -1,0 +1,47 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -94698,6 +94698,15 @@
+     searchTerm: external_exports.string().max(1024).optional()
+   }).strict(),
+   "thread/read": external_exports.object({ threadId: id3, includeTurns: external_exports.boolean().optional() }).strict(),
++  "dsh/attachmentUpload": external_exports.object({
++    id: external_exports.string().uuid(),
++    threadId: id3.optional(),
++    cwd: external_exports.string().min(1).max(4096).optional(),
++    name: external_exports.string().min(1).max(180),
++    total: external_exports.number().int().min(0).max(64 * 1024 * 1024),
++    offset: external_exports.number().int().min(0).max(64 * 1024 * 1024),
++    data: external_exports.string().max(174764)
++  }).strict().refine((params) => (params.threadId === undefined) !== (params.cwd === undefined)),
+   "thread/goal/get": external_exports.object({ threadId: id3 }).strict(),
+   "thread/goal/set": external_exports.object({
+     threadId: id3,
+@@ -95913,6 +95922,19 @@
+       this.rememberThread(connectionId, threadId);
+       if (allowedThread !== void 0) this.rememberThreadMeta(threadId, allowedThread.thread, allowedThread.cwd);
+     }
++    if (call.method === "dsh/attachmentUpload") {
++      const cwd = threadId === void 0 ? call.params.cwd : allowedThread?.cwd;
++      const root = await this.requireCodexWorkspacePath(cwd);
++      const { uploadAttachment } = await import("./attachment-upload.mjs");
++      assertCurrent();
++      try {
++        return await uploadAttachment(this.peerDeviceIds.get(connectionId) ?? connectionId, root, call.params);
++      } catch (error) {
++        if (error.code === "ENOSPC" || error.code === "EDQUOT") throw new RpcError("ATTACHMENT_DISK_FULL", "The host has insufficient space.");
++        if (error.code === "EACCES" || error.code === "EPERM") throw new RpcError("ATTACHMENT_ACCESS_DENIED", "The upload destination is not writable.");
++        throw new RpcError("ATTACHMENT_CONFLICT", "Start a new transfer for this attachment.");
++      }
++    }
+     if (call.method === "thread/settings/update" || call.method === "thread/goal/set" || call.method === "thread/goal/clear") {
+       const owner = this.turnOwners.get(threadId);
+       const peerDeviceId = this.peerDeviceIds.get(connectionId) ?? connectionId;
+@@ -96038,7 +96060,7 @@
+           await this.publishPermission(threadId, codexTurnPermissionParams(permission, allowedThread?.cwd));
+         }
+       }
+-      if (call.method === "model/list") return { ...result, remoteServiceTierForTurn: true, remoteApprovalsReviewerForTurn: true, remoteGoalMode: true };
++      if (call.method === "model/list") return { ...result, remoteServiceTierForTurn: true, remoteApprovalsReviewerForTurn: true, remoteGoalMode: true, remoteAttachmentUpload: true };
+       return result;
+     } catch (error62) {
+       finishStart?.(errorCode2(error62) === "CODEX_REQUEST_TIMEOUT");

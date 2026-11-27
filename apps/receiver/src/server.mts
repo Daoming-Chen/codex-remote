@@ -1,5 +1,7 @@
 import { renderWorkbenchPage } from './workbench-page.mjs';
 import { createDeviceDirectory, deviceDirectoryError, deviceNameEvent } from './device-directory.mjs';
+import {fileChunks, fileMime, filePreview, filePreviewLimit, fileDownloadLimit} from './project-file-content.mjs';
+import {pipeline} from 'node:stream/promises';
 import {win32,posix} from 'node:path';
 import {createServer} from 'node:http';
 import {execFile} from 'node:child_process';
@@ -304,23 +306,30 @@ async function runtimeDriver(firstCatalog){
 const catalogs=new Map();
 let pluginCatalog;
 const pluginPages=new Map();
-async function nativeModels(call){
+async function nativeModels(call,cwd){
   const models=[];
-  let canSetServiceTier=true;
+  let canSetServiceTier=true, canSetReviewer=true, canSetGoals=true, attachmentUpload=true, hasModelDefaults=true;
   let cursor;
   do{
     const page=await call('model/list',{limit:100,...(cursor?{cursor}:{})});
     canSetServiceTier&&=page.remoteServiceTierForTurn===true;
+    canSetReviewer&&=page.remoteApprovalsReviewerForTurn===true;
+    canSetGoals&&=page.remoteGoalMode===true;
+    attachmentUpload&&=page.remoteAttachmentUpload===true;
+    hasModelDefaults&&=page.remoteModelDefaults===true;
     for(const m of page.data){
       models.push({id:m.model,name:m.displayName,isDefault:m.isDefault,description:m.description||'',
         retirementAt:m.upgradeInfo?.retirementAt,serviceTiers:(m.serviceTiers||[]).filter(tier=>tier.id==='priority'||tier.id==='ultrafast'),
-        defaultEffort:m.defaultReasoningEffort,
+        defaultEffort:m.defaultReasoningEffort,defaultServiceTier:m.defaultServiceTier??null,
         efforts:(m.supportedReasoningEfforts||[]).map(option=>option.reasoningEffort)})
     }
     cursor=page.nextCursor
   }while(cursor);
-  const selected=models.find(m=>m.isDefault);
-  return {models,canSetServiceTier,defaults:{model:selected?.id,effort:selected?.defaultEffort},recentConfigurations:[]}
+  const config=hasModelDefaults?await call('dsh/modelDefaults',cwd?{cwd}:{}):{};
+  const selected=models.find(m=>m.id===config.model)||models.find(m=>m.isDefault);
+  const defaults={model:selected?.id,effort:config.effort||selected?.defaultEffort};
+  if(Object.hasOwn(config,'serviceTier'))defaults.serviceTier=config.serviceTier;
+  return {models,canSetServiceTier,canSetReviewer,canSetGoals,attachmentUpload,defaults,recentConfigurations:[]}
 }
 async function models(cwd=''){
   const cached=catalogs.get(cwd);
@@ -331,7 +340,7 @@ async function models(cwd=''){
   const flight=(async()=>{
       const native=deviceId&&(await openRemote()).nativeCall;
       if(native){
-        const data=await nativeModels(native);
+        const data=await nativeModels(native,cwd);
         if(!data.models.length)throw Error('主机没有返回模型目录');
         entry.data=data;entry.created=Date.now();entry.retryAfter=0;return data
       }
@@ -449,7 +458,12 @@ async function nativeDirectory(call,mode,target){
         }
         if(['agentMessage','plan'].includes(item.type)&&item.text)messages.push({role:item.type==='plan'?'plan':'assistant',turn:turn.id,id:item.id,text:item.text});
         if(item.type==='userMessage'){
-          const text=item.content.filter(c=>c.type==='text').map(c=>c.text).join('\n');
+          const text=item.content.flatMap(c=>{
+            if(c.type==='text')return [c.text];
+            if(c.type==='localImage'&&typeof c.path==='string'&&!/[\x00-\x1f\x7f]/.test(c.path))
+              return ['上传附件（主机文件）：'+c.path];
+            return []
+          }).join('\n');
           const images=item.content.filter(c=>c.type==='image'&&typeof c.url==='string'&&
             /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/.test(c.url)).map(c=>c.url);
           messages.push({role:'user',turn:turn.id,text,...(images.length?{images}:{})})
@@ -460,8 +474,12 @@ async function nativeDirectory(call,mode,target){
       if(last?.turn===turn.id&&['assistant','status'].includes(last.role)&&Number.isSafeInteger(turn.durationMs)&&turn.durationMs>=0)last.turnDurationMs=turn.durationMs
     }
     const usage=await readNativeUsage(thread.id,thread.turns?.at(-1)?.id);
-    return {usage,projectId:nativeProjectId(thread),thread:thread.id,name:thread.name||thread.preview,cwd:thread.cwd,messages,
-      ...(thread.model?{threadConfig:{model:thread.model,effort:thread.reasoningEffort}}:{}),activeTurn:thread.turns?.find(t=>t.status==='inProgress')?.id}
+    let goalState={};
+    try{goalState=await call('thread/goal/get',{threadId:thread.id})}
+    catch{/* Older Remote plugins and Codex hosts can omit goal support. */}
+    return {...goalState,usage,projectId:nativeProjectId(thread),thread:thread.id,name:thread.name||thread.preview,cwd:thread.cwd,messages,
+      ...(thread.model?{threadConfig:{model:thread.model,effort:thread.reasoningEffort}}:{}),
+      ...(Object.hasOwn(thread,'serviceTier')?{threadServiceTier:thread.serviceTier}:{}),activeTurn:thread.turns?.find(t=>t.status==='inProgress')?.id}
   }
   if(mode==='archive-check'||mode==='archive-set'){
     const {ids,archived}=JSON.parse(target);
@@ -846,6 +864,99 @@ async function watchTurn(job,launch=null,freshSubmission=false){
       if(!job.turn&&Date.now()-job.created>150000)throw Error('主机尚未确认启动本轮任务')}
   }
 }
+async function nativeChangeGoal(call,thread,{expected,update,setup},progress){
+  let cwd=setup?.cwd;
+  const preset=setup?.sandbox==='danger-full-access'?'danger-full-access':'workspace-write';
+  if(!thread){
+    if(!cwd){
+      const page=await call('project/list',{limit:100});
+      const root=page.data?.find(project=>project.roots?.length)?.roots[0];
+      cwd=typeof root==='string'?root:root?.path
+    }
+    if(!cwd)throw Error('请先在主机 Codex 中打开一个项目');
+    progress?.sending();
+    const opened=await call('thread/start',{cwd,permissionPreset:preset,...(setup.model?{model:setup.model}:{})});
+    thread=opened.thread.id;cwd=opened.thread.cwd||cwd;progress?.opened(thread)
+  }
+  const params={threadId:thread};
+  const {goal}=await call('thread/goal/get',params);
+  if(expected===null?goal!==null:!goal||Object.entries(expected).some(([key,value])=>goal[key]!==value))
+    return {conflict:true,thread,goal};
+  if(setup){
+    const opened=await call('thread/resume',params);
+    cwd=opened.thread.cwd||cwd;
+    const settings={threadId:thread,permissionPreset:preset,
+      approvalsReviewer:setup.approvalsReviewer||'user'};
+    if(setup.model)settings.model=setup.model;
+    if(setup.effort)settings.effort=setup.effort;
+    if(setup.serviceTier)settings.serviceTier=setup.serviceTier==='default'?null:setup.serviceTier;
+    await call('thread/settings/update',settings)
+  }
+  if(update.clear){
+    const {cleared}=await call('thread/goal/clear',{...params,origin:'user'});
+    if(!cleared)return {conflict:true,thread,...await call('thread/goal/get',params)};
+    return {thread,goal:null}
+  }
+  progress?.sending();
+  return {thread,cwd,...await call('thread/goal/set',{...params,...update,origin:'user'})}
+}
+async function daemonChangeGoal(thread,change,progress){
+  const payload=Buffer.from(JSON.stringify(change)),dir=directory(randomUUID()),driver=await runtimeDriver();
+  try{
+    for(let i=0;i<payload.length;i+=1350){
+      const prefix=i===0?'umask 077; mkdir -m 700 '+dir+' && ':'';
+      const file=dir+'/part-'+String(i).padStart(6,'0');
+      const ok=await command(prefix+'printf %s '+payload.subarray(i,i+1350).toString('base64')+' | base64 -d >'+file+' && echo READY');
+      if(ok!=='READY')throw Error('目标内容未送达')
+    }
+    progress?.sending();
+    const reply=JSON.parse(await command('cat '+dir+'/part-* >'+dir+'/input && python3 '+driver+' --edit-goal '+(thread||'-')+' '+dir+'/input'));
+    if(reply.goalError){
+      if(reply.retryable)progress?.opened(reply.thread);
+      throw Error(reply.goalError)
+    }
+    if(reply.type==='turn.failed')throw Error(reply.error?.message||'主机目标修改失败');
+    return reply
+  }finally{await command('rm -f '+dir+'/part-* '+dir+'/input; rmdir '+dir).catch(()=>{})}
+}
+// A timeout after thread/start or goal/set must not cause a second goal to be created.
+const goalFlights=new Map(),goalThreadLocks=new Set();
+async function activateGoalOnce(id,digest,run){
+  const active=goalFlights.get(id);
+  if(active)return active.digest===digest?active.flight:{requestConflict:true};
+  const receipt=new URL('goal-'+id+'.json',stateDir);
+  const flight=(async()=>{
+    let resumeThread=null,sending=false;
+    try{await writeFile(receipt,JSON.stringify({digest}),{mode:0o600,flag:'wx'})}
+    catch(error){
+      if(error.code!=='EEXIST')throw error;
+      const prior=JSON.parse(await readFile(receipt,'utf8'));
+      if(prior.digest!==digest)return {requestConflict:true};
+      if(prior.result)return prior.result;
+      if(!prior.retryable)return {uncertain:true,thread:prior.thread};
+      resumeThread=prior.thread||null;
+      await writeFile(receipt,JSON.stringify({digest,thread:resumeThread}),{mode:0o600})
+    }
+    const temporary=new URL('goal-'+randomUUID()+'.tmp',stateDir);
+    const progress={sending:()=>{sending=true},opened:thread=>{resumeThread=thread;sending=false}};
+    let record;
+    try{
+      const result=await run(resumeThread,progress);
+      record=result.busy?{digest,retryable:true,thread:resumeThread}:{digest,result};
+      return result
+    }catch(error){
+      const rejected=['METHOD_NOT_ALLOWED','INVALID_MESSAGE','CODEX_THREAD_BUSY','CODEX_THREAD_NOT_ALLOWED','CODEX_PATH_NOT_ALLOWED','CODEX_TURN_OWNED','CODEX_UPSTREAM_ERROR'].includes(error.code);
+      record={digest,thread:resumeThread,retryable:!sending||rejected};
+      if(!record.retryable)return {uncertain:true,thread:resumeThread};
+      throw error
+    }finally{
+      await writeFile(temporary,JSON.stringify(record),{mode:0o600});
+      await rename(temporary,receipt)
+    }
+  })();
+  goalFlights.set(id,{flight,digest});
+  try{return await flight}finally{goalFlights.delete(id)}
+}
 const nativeApprovals=new Map();
 const nativeDecisions=new Map([['仅允许本次','accept'],['拒绝','decline'],['取消本轮','cancel']]);
 async function nativeTurn(job,prompt,previous,call){
@@ -860,6 +971,9 @@ async function nativeTurn(job,prompt,previous,call){
   const texts=new Map();
   function frame({method,params}){
     if(!params||params.threadId!==job.thread)return;
+    if(method==='thread/goal/updated'||method==='thread/goal/cleared'){
+      job.goal=params.goal??null;notify(job);return
+    }
     if(!job.turn){buffer.push({method,params});return}
     if(method==='serverRequest/resolved'&&nativeApprovals.get(params.requestHandle)?.job===job){
       nativeApprovals.delete(params.requestHandle);delete job.inputRequests[params.requestHandle];notify(job);return
@@ -923,10 +1037,12 @@ async function nativeTurn(job,prompt,previous,call){
     const pick=job.selection;
     if(!job.turn){
       if(job.nativeSubmitting)throw Error('主机可能已收到消息，请在主机会话中核对后再发送');
-      if(pick.sandbox!=='remote-workspace'&&!(pick.sandbox==='danger-full-access'&&pick.approvalPolicy==='never'))
-        throw Error('该主机支持工作区写入（按需审批）和完全访问，请在任务权限中选择');
+      if(!['remote-workspace','auto-review'].includes(pick.sandbox)&&!(pick.sandbox==='danger-full-access'&&pick.approvalPolicy==='never'))
+        throw Error('请在任务权限中选择当前主机支持的模式');
       if(pick.collaborationMode==='plan')throw Error('该主机接口尚不支持计划模式');
-      const permissionPreset=pick.sandbox==='remote-workspace'?'workspace-write':pick.sandbox;
+      const permissionPreset=pick.sandbox==='danger-full-access'?pick.sandbox:'workspace-write';
+      const reviewerSupported=(await models('')).canSetReviewer===true;
+      if(pick.sandbox==='auto-review'&&!reviewerSupported)throw Error('当前主机连接未提供自动审批');
       const options={permissionPreset,...(pick.model?{model:pick.model}:{})};
       if(!previous&&!job.cwd){
         const list=await call('project/list',{limit:100});
@@ -941,10 +1057,12 @@ async function nativeTurn(job,prompt,previous,call){
       const started=previous?await call('thread/resume',{threadId:previous,...(pick.model?{model:pick.model}:{})}):
         await call('thread/start',{cwd:job.cwd,...options});
       job.thread=started.thread.id;
+      if(Object.hasOwn(started,'serviceTier'))job.threadServiceTier=started.serviceTier;
       job.nativeSubmitting=true;await save(job);
       if(!previous)await subscribe();
       const input=nativeInput(prompt,pick.structuredInput);
       const result=await call('turn/start',{threadId:job.thread,input,...options,...(pick.effort?{effort:pick.effort}:{}),
+        ...(reviewerSupported?{approvalsReviewer:pick.sandbox==='auto-review'?'auto_review':'user'}:{}),
         ...(pick.serviceTier?{serviceTierForTurn:pick.serviceTier}:{})});
       job.turn=result.turn.id;
       job.observedStartAt=Date.now();
@@ -1136,7 +1254,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
               res.write('event: text\ndata: '+JSON.stringify([turnId,itemId,params.delta])+'\n\n');
             else if(method==='item/started'&&item?.type==='agentMessage')
               res.write('event: text\ndata: '+JSON.stringify([turnId,item.id,null])+'\n\n');
-            else if(['turn/started','turn/completed','thread/name/updated','item/completed'].includes(method))
+            else if(['turn/started','turn/completed','thread/name/updated','item/completed','thread/goal/updated','thread/goal/cleared'].includes(method))
               res.write('data: CHANGED\n\n')
           },stop.signal,()=>stop.abort());
           try{
@@ -1273,7 +1391,12 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         return json(502,{error:'接收端未能创建网页预览地址'});
       return json(200,{url})
     }
-    if(req.method==='GET'&&req.url==='/api/capabilities')return json(200,{planMode:!(deviceId&&(await openRemote()).nativeCall),projectFiles:true,commandApproval:true,fullAccess:true,voiceChat:true});
+    if(req.method==='GET'&&req.url==='/api/capabilities'){
+      const native=!!(deviceId&&(await openRemote()).nativeCall);
+      const catalog=native?await models(''):null;
+      return json(200,{planMode:!native,projectFiles:true,commandApproval:true,fullAccess:true,voiceChat:true,
+        autoReview:!native||catalog?.canSetReviewer===true,attachmentUpload:!native||catalog?.attachmentUpload===true,goalMode:!native||catalog?.canSetGoals===true});
+    }
     if(req.method==='POST'&&['/api/plugins/page','/api/plugins/detail'].includes(req.url)){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const chunks=[];let bytes=0;
@@ -1304,13 +1427,14 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       }
       return json(200,await pluginCatalog.flight)
     }
-    if(req.method==='POST'&&req.url==='/api/project-file-snapshot'){
+    if(req.method==='POST'&&['/api/project-file-snapshot','/api/project-file-download'].includes(req.url)){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const parts=[];let size=0;
       for await(const part of req){size+=part.length;if(size>16384)return json(413,{error:'路径过长'});parts.push(part)}
-      const {root,path,thread,workspace=root,workingTree=false}=JSON.parse(Buffer.concat(parts));
+      const {root,path,thread,workspace=root,workingTree=false,version}=JSON.parse(Buffer.concat(parts));
       if(typeof root!=='string'||typeof path!=='string')return json(400,{error:'路径无效'});
       await ensureProjectDirectory();
+      let info, readRange, limit=fileDownloadLimit;
       if([...nativeRoots.values()].some(roots=>roots.includes(root))){
         const paths=/^(?:[a-z]:|\\\\)/i.test(root)?win32:posix;
         const relative=paths.relative(root,path);
@@ -1318,18 +1442,45 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         if((thread!=null&&!uuid.test(thread))||!paths.isAbsolute(path)||!within(relative)||relative.split(paths.sep).some(part=>/[:\x00-\x1f]/.test(part)||(paths===win32&&/[. ]$/.test(part))))
           return json(400,{error:'请选择当前聊天项目内的文件'});
         const ctx=await openRemote();
-        if(!ctx.readWorkspaceFile)return json(400,{error:'当前主机未提供文件预览'});
-        const info=await workspaceFileThread(ctx.nativeCall,paths,root,workspace,thread);
-        if(!info)return json(403,{error:'当前项目还没有可用于预览的主机聊天'});
-        const file=paths.relative(info.cwd,path);
+        if(!ctx.workspaceFileStat||!ctx.workspaceFileRange)return json(400,{error:'当前主机未提供文件预览'});
+        const session=await workspaceFileThread(ctx.nativeCall,paths,root,workspace,thread);
+        if(!session)return json(403,{error:'当前项目还没有可用于预览的主机聊天'});
+        const file=paths.relative(session.cwd,path);
         if(!within(file))return json(403,{error:'文件不在当前聊天目录内'});
-        const result=await ctx.readWorkspaceFile(info.id,file.split(paths.sep).join('/'));
-        if(!paths.isAbsolute(result.absolutePath||'')||paths.relative(path,result.absolutePath)!=='')return json(409,{error:'主机返回的路径不一致'});
-        if(result.eof!==true||typeof result.text!=='string'||result.text.includes('\0')||Buffer.byteLength(result.text)>512*1024)return json(422,{error:'仅支持预览较短的文本文件'});
-        return json(200,{text:result.text,source:'working-tree'})
+        const name=file.split(paths.sep).join('/');
+        const verified=result=>{
+          if(!paths.isAbsolute(result.absolutePath||'')||paths.relative(path,result.absolutePath)!=='')throw Error('主机返回的路径不一致');
+          return {...result,version:result.rangeVersion??result.version}
+        };
+        const meta=verified(await ctx.workspaceFileStat(session.id,name));
+        info={bytes:meta.bytes,version:meta.version,source:'working-tree'};
+        limit=meta.rangeDownload===true?fileDownloadLimit:filePreviewLimit;
+        readRange=async(offset,length)=>verified(await ctx.workspaceFileRange(session.id,name,offset,length));
+      }else{
+        if(!fileSearchRoots.has(root)||!projectPathInside(posix,root,workspace)||!projectPathInside(posix,workspace,path)||
+            path.includes('\0')||path===root)return json(400,{error:'请选择主机项目内的文件'});
+        const mode=workingTree===true?'project-working-file':'project-file-snapshot';
+        const read=(offset,length,expectedVersion)=>remoteThreads(mode,JSON.stringify({root,path,offset,length,version:expectedVersion}));
+        const meta=await read(0,0,version);
+        info={bytes:meta.bytes,version:meta.version,source:meta.source};
+        readRange=(offset,length)=>read(offset,length,info.version);
       }
-      if(!fileSearchRoots.has(root)||typeof path!=='string'||!path.startsWith(root+'/')||path.includes('\0'))return json(400,{error:'请选择主机项目内的文件'});
-      return json(200,await remoteThreads(workingTree===true?'project-working-file':'project-file-snapshot',JSON.stringify({root,path})))
+      if(!Number.isSafeInteger(info.bytes)||info.bytes<0||typeof info.version!=='string')return json(502,{error:'主机返回的文件信息无效'});
+      if(version!=null&&version!==info.version)return json(409,{error:'文件已经变化，请重新打开'});
+      const download=req.url==='/api/project-file-download';
+      if(info.bytes>limit){
+        const error=limit===filePreviewLimit?'当前主机插件最多支持 4 MiB 文件。更新兼容插件后可下载至 64 MiB。':'文件超过 64 MiB 下载上限';
+        return download?json(413,{error}):json(200,{...info,mime:'application/octet-stream',downloadError:error});
+      }
+      if(!download)return json(200,await filePreview(path,info,readRange));
+      const chunks=fileChunks(info,readRange);
+      const first=await chunks.next();
+      const mime=fileMime(path,first.value||Buffer.alloc(0));
+      const filename=path.split(/[\\/]/).pop()||'file';
+      res.writeHead(200,{'Content-Type':mime,'Content-Length':info.bytes,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+        'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(filename).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16))});
+      await pipeline((async function*(){if(!first.done)yield first.value;yield* chunks})(),res);
+      return
     }
     if(req.method==='POST'&&req.url==='/api/project-directories'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
@@ -1394,32 +1545,110 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(cwd&&!allowedProjects.has(cwd))return json(400,{error:'未知主机项目'});
       return json(200,await models(cwd))
     }
+    if(req.method==='POST'&&req.url?.split('?')[0]==='/api/attachments/upload'){
+      if(req.headers.origin!==origin||req.headers['content-type']!=='application/octet-stream')
+        return json(403,{error:'无效请求来源'});
+      const query=new URL(req.url,origin).searchParams;
+      const id=query.get('id'),thread=query.get('thread'),cwd=query.get('cwd'),projectId=query.get('projectId');
+      const name=query.get('name'),offsetValue=query.get('offset'),totalValue=query.get('total');
+      if(!uuid.test(id)||thread&&!uuid.test(thread)||(!thread&&!cwd)||!name||Buffer.byteLength(name)>180||
+         /[<>:"/\\|?*\x00-\x1f\x7f]/.test(name)||/[. ]$/.test(name)||/^(con|prn|aux|nul|clock\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(name))
+        return json(400,{error:'请选择已关联的聊天或项目，并使用有效的文件名'});
+      if(!/^\d{1,9}$/.test(offsetValue)||!/^\d{1,9}$/.test(totalValue))return json(400,{error:'无效的附件大小'});
+      const offset=Number(offsetValue),total=Number(totalValue);
+      if(total>64*1024*1024)return json(413,{error:'单个文件最多 64 MiB'});
+      if(offset>total)return json(400,{error:'无效的附件分块位置'});
+      let size=0;const chunks=[];
+      for await(const chunk of req){
+        size+=chunk.length;
+        if(size>128*1024||offset+size>total)return json(413,{error:'附件分块过长'});
+        chunks.push(chunk)
+      }
+      if(!size&&total)return json(400,{error:'空的附件分块'});
+      if(!thread&&!await isKnownChatProject(cwd,projectId))return json(403,{error:'请重新选择主机项目'});
+      const data=Buffer.concat(chunks).toString('base64');
+      const args={id,name,total,offset,data,...(thread?{threadId:thread}:{cwd})};
+      const native=deviceId&&(await openRemote()).nativeCall;
+      let result;
+      if(native){
+        try{result=await native('dsh/attachmentUpload',args)}
+        catch(error){
+          if(['METHOD_NOT_ALLOWED','METHOD_NOT_FOUND'].includes(error.code))
+            return json(501,{error:'请更新主机 Remote 插件以传输文件'});
+          if(error.code==='ATTACHMENT_DISK_FULL')return json(507,{error:'主机存储空间不足'});
+          if(['ATTACHMENT_ACCESS_DENIED','CODEX_PATH_NOT_ALLOWED','CODEX_THREAD_NOT_ALLOWED'].includes(error.code))
+            return json(403,{error:'主机未允许写入所选聊天或项目'});
+          if(error.code==='ATTACHMENT_CONFLICT')return json(409,{error:'上传已过期或文件位置发生变化，请重新选择文件'});
+          throw error
+        }
+      }else{
+        const driver=await runtimeDriver(),input=Buffer.from(JSON.stringify(args)).toString('base64');
+        const lines=[];
+        for await(const line of remoteLines('python3 '+driver+' --upload-attachment',false,false,null,null,null,input))lines.push(line);
+        result=JSON.parse(lines.join('\n'));
+        if(result.type==='turn.failed')return json(409,{error:result.error?.message||'主机未确认附件'})
+      }
+      if(typeof result?.complete!=='boolean'||!Number.isSafeInteger(result.offset)||result.offset<offset+size||result.offset>total||
+         (result.complete&&(result.name!==name||result.size!==total||typeof result.path!=='string'||typeof result.root!=='string')))
+        return json(502,{error:'主机文件回执无效'});
+      return json(200,result)
+    }
     if(req.method==='POST'&&req.url==='/api/thread-goal'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const chunks=[];let size=0;
       for await(const chunk of req){size+=chunk.length;if(size>131072)return json(413,{error:'目标过长'});chunks.push(chunk)}
-      const {thread,expected,objective,status,clear}=JSON.parse(Buffer.concat(chunks));
-      if(!uuid.test(thread)||typeof expected?.objective!=='string'||typeof expected.status!=='string'||!Number.isFinite(expected.createdAt))return json(400,{error:'缺少目标版本'});
+      const data=JSON.parse(Buffer.concat(chunks));
+      const {thread,expected,objective,status,clear,activate=false,id}=data;
+      const versioned=typeof expected?.objective==='string'&&typeof expected.status==='string'&&Number.isFinite(expected.createdAt);
+      if(typeof activate!=='boolean'||(thread!==null&&!uuid.test(thread))||(!thread&&!activate)||
+         (!versioned&&!(activate&&expected===null))||(activate&&!uuid.test(id))||(!thread&&expected!==null))
+        return json(400,{error:'无效目标请求或缺少目标版本'});
       const update={};
-      if(clear!==undefined){if(clear!==true||status!==undefined||objective!==undefined)return json(400,{error:'无效清除请求'});update.clear=true}
-      else if(typeof objective==='string'&&objective.trim()&&status===undefined)update.objective=objective.trim();
-      else if(objective===undefined&&((status==='paused'&&expected.status==='active')||(status==='active'&&expected.status==='paused')))update.status=status;
+      if(clear!==undefined){
+        if(clear!==true||activate||status!==undefined||objective!==undefined)return json(400,{error:'无效清除请求'});
+        update.clear=true
+      }else if(typeof objective==='string'&&objective.trim()&&status===undefined){
+        update.objective=objective.trim();
+        if(activate)update.status='active'
+      }else if(!activate&&objective===undefined&&((status==='paused'&&expected.status==='active')||(status==='active'&&expected.status==='paused')))update.status=status;
       else return json(400,{error:'无效的目标修改'});
-      const before={objective:expected.objective,status:expected.status,createdAt:expected.createdAt};
-      const payload=Buffer.from(JSON.stringify({expected:before,update})),dir=directory(randomUUID()),driver=await runtimeDriver();
-      try{
-        for(let i=0;i<payload.length;i+=1350){
-          const prefix=i===0?'umask 077; mkdir -m 700 '+dir+' && ':'';
-          const file=dir+'/part-'+String(i).padStart(6,'0');
-          const ok=await command(prefix+'printf %s '+payload.subarray(i,i+1350).toString('base64')+' | base64 -d >'+file+' && echo READY');
-          if(ok!=='READY')throw Error('目标内容未送达')
+      const native=deviceId&&(await openRemote()).nativeCall;
+      const change={expected:expected===null?null:{objective:expected.objective,status:expected.status,createdAt:expected.createdAt},update};
+      if(activate){
+        const {cwd,projectId,model,effort,serviceTier,sandbox,approvalPolicy}=data;
+        if(!thread&&!await isKnownChatProject(cwd,projectId))return json(400,{error:'请重新从主机加载项目'});
+        const allowed=native?['remote-workspace','auto-review','danger-full-access']:
+          ['workspace-write','read-only','ask-for-approval','auto-review','danger-full-access'];
+        if(!allowed.includes(sandbox)||!['never','untrusted'].includes(approvalPolicy)||
+            (native&&approvalPolicy!=='never'))return json(400,{error:'无效的目标权限'});
+        if(native||model||effort||serviceTier){
+          const catalog=await models(cwd||'');
+          if(native&&!catalog.canSetGoals)return json(400,{error:'当前主机的 Remote 插件尚未支持目标模式'});
+          if(model||effort||serviceTier){
+            const selected=catalog.models.find(entry=>entry.id===model);
+            if(!selected||(effort&&!selected.efforts.includes(effort))||
+                (serviceTier&&serviceTier!=='default'&&!selected.serviceTiers?.some(t=>t.id===serviceTier)))
+              return json(400,{error:'无效的目标模型配置'})
+          }
         }
-        const reply=JSON.parse(await command('cat '+dir+'/part-* >'+dir+'/input && python3 '+driver+' --edit-goal '+thread+' '+dir+'/input'));
-        if(reply.conflict)return json(409,{error:'主机目标已更新，请重新打开目标卡',goal:reply.goal});
-        if(update.clear&&reply.cleared===true)return json(200,{goal:null});
-        if(!reply.goal)return json(502,{error:'主机未确认目标修改'});
-        return json(200,{goal:reply.goal})
-      }finally{await command('rm -f '+dir+'/part-* '+dir+'/input; rmdir '+dir).catch(()=>{})}
+        const reviewed=['auto-review','ask-for-approval'].includes(sandbox);
+        change.setup={cwd,projectId,model,effort,serviceTier,sandbox:reviewed?'workspace-write':sandbox,
+          approvalPolicy:reviewed?'on-request':approvalPolicy,approvalsReviewer:sandbox==='auto-review'?'auto_review':'user'}
+      }
+      const execute=async(resumed,progress)=>{
+        const target=resumed||thread;
+        if(target&&goalThreadLocks.has(target))return {busy:true};
+        if(target)goalThreadLocks.add(target);
+        try{return await (native?nativeChangeGoal(native,target,change,progress):daemonChangeGoal(target,change,progress))}
+        finally{if(target)goalThreadLocks.delete(target)}
+      };
+      const reply=activate?await activateGoalOnce(id,createHash('sha256').update(JSON.stringify([thread,change])).digest('hex'),execute):await execute();
+      if(reply.uncertain)return json(409,{error:'未收到目标提交回执，请先在主机会话中核对目标',thread:reply.thread||thread});
+      if(reply.busy||reply.requestConflict)return json(409,{error:reply.busy?'此会话正在修改目标，请稍后重试':'目标提交编号已经使用'});
+      if(reply.conflict)return json(409,{error:'主机目标已更新，请重新打开目标卡',goal:reply.goal});
+      if(!uuid.test(reply.thread)||(update.clear?reply.goal!==null:!reply.goal))return json(502,{error:'主机未确认目标修改'});
+      if(activate)directoryChanged();
+      return json(200,reply)
     }
     if(req.method==='POST'&&req.url==='/api/archives'){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
@@ -1685,10 +1914,12 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const {id,prompt,parent,expectedThread,cwd,projectId,model,effort,serviceTier,collaborationMode,approvalPolicy="never",sandbox="read-only",images=[]}=JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if(!['never','untrusted'].includes(approvalPolicy))return json(400,{error:'无效审批策略'});
       if(collaborationMode!=null&&!['plan','default'].includes(collaborationMode))return json(400,{error:'无效的协作模式'});
-      if(!['read-only','workspace-write','danger-full-access','remote-workspace'].includes(sandbox))return json(400,{error:'无效的沙箱模式'});
+      if(!['read-only','workspace-write','danger-full-access','remote-workspace','ask-for-approval','auto-review'].includes(sandbox))return json(400,{error:'无效的沙箱模式'});
       if(!validImages(images))return json(400,{error:'仅支持总计 256 KiB 以内的 PNG、JPEG 和 WebP 图片'});
       if(!uuid.test(id)||typeof prompt!=='string'||(!prompt.trim()&&!images.length)||Buffer.byteLength(prompt)>16000)return json(400,{error:'请输入不超过 16 KB 的消息'});
       await requireReceiverIdentity();
+      if(sandbox==='auto-review'&&deviceId&&(await openRemote()).nativeCall&&!(await models('')).canSetReviewer)
+        return json(400,{error:'当前主机连接未提供自动审批'});
       if(collaborationMode==='plan'&&deviceId&&(await openRemote()).nativeCall)
         return json(400,{error:'当前主机连接仅支持普通聊天'});
       let previous=null,project=cwd;
@@ -1749,6 +1980,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
     }
     json(404,{error:'未找到'})
   }catch(e){
+    if(res.headersSent||res.destroyed){res.destroy();return}
     if(req.url?.startsWith('/api/web-preview/')){
       if(e.code==='LOOPBACK_PORT_DENIED')return json(403,{code:e.code,error:'主机尚未允许预览此端口。主机授权后可重新打开。'});
       if(['FEATURE_NOT_SUPPORTED','METHOD_NOT_FOUND','METHOD_NOT_ALLOWED'].includes(e.code))return json(501,{code:e.code,error:'当前主机未提供网页预览'});

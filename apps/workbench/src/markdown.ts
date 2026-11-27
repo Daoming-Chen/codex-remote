@@ -1,6 +1,4 @@
-import MarkdownIt from 'markdown-it';
-import {tasklist} from '@mdit/plugin-tasklist';
-import {tex} from '@mdit/plugin-tex';
+import {Marked, Renderer} from 'marked';
 import {ParseError, renderToString} from 'katex';
 
 declare global {
@@ -9,80 +7,126 @@ declare global {
     renderMarkdownBlocks: (text: string, streaming?: boolean) => string[];
   }
 }
-const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true });
-markdown.disable('image');
-markdown.use(tasklist, {label:false});
-markdown.use(tex, {
-  delimiters: 'all',
-  mathFence: true,
-  render(source, displayMode, environment) {
-    const streaming = 'streaming' in environment && environment.streaming === true;
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+const han = /\p{Script=Han}/u;
+const cjkStrong = /^\*\*([^\s*](?:[^*\n]|\*(?!\*))*?[\p{Pe}\p{Pf}。！？：；，、])\*\*(?=\p{Script=Han})/u;
+const inlineEquations = [
+  /^\\\[((?:[^\\]|\\(?!\[|\])[\s\S])+)\\\]/,
+  /^\\\(((?:[^\\]|\\(?!\))[\s\S])+)\\\)/,
+  /^\$\$(?!\$)((?:[^$\\]|\\[\s\S]|\$(?!\$))+)\$\$(?!\$)/,
+  /^\$(?![\s$])((?:[^$\\\n]|\\.)*?[^$\s\\])\$(?![\d$])/,
+];
+const blockEquations = [
+  /^ {0,3}\\\[((?:[^\\]|\\(?!\[|\])[\s\S])+)\\\][ \t]*(?:\n|$)/,
+  /^ {0,3}\$\$(?!\$)((?:[^$\\]|\\[\s\S]|\$(?!\$))+)\$\$(?!\$)[ \t]*(?:\n|$)/,
+];
+
+function safeHref(href: string) {
+  // Set attributes using escaped text, and resolve using the browser's URL rules.
+  // Drive paths arriving from a Windows host stay relative to the receiver.
+  if (href.includes('&')) {
+    const decoder=document.createElement('textarea');
+    decoder.innerHTML=href.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    href=decoder.value;
+  }
+  if (/^[a-z]:[\\/]/i.test(href)) href='/'+href.replace(/\\/g,'/');
+  try {
+    const target=new URL(href,'https://receiver.invalid/');
+    return ['http:', 'https:', 'mailto:', 'tel:'].includes(target.protocol) ? href : null;
+  } catch { return null }
+}
+
+function createRenderer(streaming: boolean) {
+  function equation(source: string, displayMode: boolean) {
     try {
       return renderToString(source, {displayMode, throwOnError:streaming, trust:false, maxSize:20});
     } catch (error) {
       if (streaming && error instanceof ParseError) return '';
       throw error;
     }
-  },
-});
-
-markdown.block.ruler.at('math_block_bracket', (state, start, end, silent) => {
-  const opening = state.bMarks[start] + state.tShift[start];
-  if (!state.src.startsWith('\\[', opening)) return false;
-  for (let line = start; line < end; line++) {
-    const begin = state.bMarks[line] + state.tShift[line];
-    const limit = state.eMarks[line];
-    if (line > start && begin < limit &&
-        (state.sCount[line] < state.blkIndent || state.src.startsWith('\\[', begin))) return false;
-    for (let pos = line === start ? opening + 2 : begin; pos < limit; pos++) {
-      if (state.src[pos] !== '\\') continue;
-      if (state.src[++pos] !== ']') continue;
-      // Prose after the first closing delimiter belongs to the paragraph.
-      if (state.src.slice(pos + 1, limit).trim()) return false;
-      if (silent) return true;
-      const token = state.push('math_block', 'math', 0);
-      token.block = true;
-      token.markup = '\\[';
-      token.map = [start, line + 1];
-      token.content = state.getLines(start, line + 1, state.sCount[start], false).trim().slice(2, -2);
-      state.line = line + 1;
-      return true;
-    }
   }
-  return false;
-}, {alt: ['paragraph', 'reference', 'blockquote', 'list']});
+  return new Marked({
+    breaks:true, gfm:true,
+    extensions:[
+      {
+        name:'equationBlock', level:'block',
+        start(src) { return src.search(/(?:^|\n) {0,3}(?:\\\[|\$\$)/) },
+        tokenizer(src) {
+          for (const pattern of blockEquations) {
+            const match=pattern.exec(src);
+            if (match) return {type:'equationBlock',raw:match[0],text:match[1].trim()};
+          }
+        },
+        renderer(token) { return equation(token.text,true) }
+      },
+      {
+        name:'equationInline', level:'inline',
+        start(src) { return src.search(/\\[[(]|\$/) },
+        tokenizer(src) {
+          for (const pattern of inlineEquations) {
+            const match=pattern.exec(src);
+            if (match) return {type:'equationInline',raw:match[0],text:match[1]};
+          }
+        },
+        renderer(token) { return equation(token.text,false) }
+      }
+    ],
+    tokenizer:{
+      emStrong(src,maskedSrc) {
+        // CommonMark cannot close punctuation-delimited emphasis immediately before Han text.
+        // Use the lexer's mask to avoid recognizing markers inside escapes, links or code.
+        const match=cjkStrong.exec(maskedSrc.slice(-src.length));
+        if (!match) return false;
+        const raw=src.slice(0,match[0].length),text=raw.slice(2,-2);
+        return {type:'strong',raw,text,tokens:this.lexer.inlineTokens(text)};
+      },
+      del(src) { return src.startsWith('~~') ? false : undefined }
+    },
+    renderer:{
+      html({text}) { return escapeHtml(text) },
+      text(token) {
+        if ('tokens' in token && token.tokens) return this.parser.parseInline(token.tokens);
+        return token.text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      },
+      image({raw,href,text}) {
+        const path=safeHref(href);
+        if(path&&/^https?:\/\//i.test(path))return '<a href="'+escapeHtml(path)+'">'+escapeHtml(text||'查看图片')+'</a>';
+        if(!path||/^(?:[a-z][a-z0-9+.-]*:|\/\/|\\\\)/i.test(path))return escapeHtml(raw);
+        const label=text||path.split(/[\\/]/).pop()||'图片';
+        return '<a data-project-image href="'+escapeHtml(path)+'">'+escapeHtml(label)+'</a>';
+      },
+      link({href,title,tokens}) {
+        const label=this.parser.parseInline(tokens),safe=safeHref(href);
+        if (safe===null) return label;
+        return '<a href="'+escapeHtml(safe)+'"'+(title?' title="'+escapeHtml(title)+'"':'')+'>'+label+'</a>';
+      },
+      paragraph({text,tokens}) {
+        const marker=han.test(text)?' data-markdown-han-text="true"':'';
+        return '<p'+marker+'>'+this.parser.parseInline(tokens)+'</p>\n';
+      },
+      listitem(item) {
+        const html=Renderer.prototype.listitem.call(this,item);
+        return item.task ? html.replace('<li>','<li class="task-list-item">') : html;
+      },
+      code({text,lang}) {
+        if (lang?.trim().split(/\s+/,1)[0]==='math') return equation(text,true);
+        return false;
+      },
+    },
+  });
+}
 
-// The block rules handle standalone equations. Codex also accepts these
-// delimiters inside a paragraph, where the expression uses inline math.
-const bracketEquation = /\\\[((?:[^\\]|\\(?!\])[\s\S])+)\\\]/y;
-const dollarEquation = /\$\$(?!\$)((?:[^$\\]|\\[\s\S]|\$(?!\$))+)\$\$(?!\$)/y;
-markdown.inline.ruler.before('escape', 'codex_inline_equation', (state, silent) => {
-  const opening = state.src.slice(state.pos, state.pos + 2);
-  const rule = opening === '\\[' ? bracketEquation : opening === '$$' ? dollarEquation : null;
-  if (!rule || (opening === '$$' && state.src[state.pos - 1] === '$')) return false;
-  rule.lastIndex = state.pos;
-  const match = rule.exec(state.src);
-  if (!match || rule.lastIndex > state.posMax) return false;
-  if (!silent) {
-    const token = state.push('math_inline', 'math', 0);
-    token.markup = opening;
-    token.content = match[1];
-  }
-  state.pos = rule.lastIndex;
-  return true;
-});
-
-window.renderMarkdown = text => markdown.render(text);
-window.renderMarkdownBlocks = (text, streaming = true) => {
-  const environment = {streaming};
-  const tokens = markdown.parse(text, environment);
-  const blocks: string[] = [];
-  let start = 0;
-  for (let index = 0; index < tokens.length; index++) {
-    if (tokens[index].level !== 0 || tokens[index].nesting === 1) continue;
-    const block = markdown.renderer.render(tokens.slice(start, index + 1), markdown.options, environment);
-    if (block) blocks.push(block);
-    start = index + 1;
-  }
-  return blocks;
-};
+const completeRenderer=createRenderer(false);
+const liveRenderer=createRenderer(true);
+function renderBlocks(text: string, streaming: boolean) {
+  const renderer=streaming?liveRenderer:completeRenderer;
+  const blocks=renderer.lexer(text);
+  return blocks.filter(token=>token.type!=='space').map(token=>renderer.parser([token])).filter(Boolean);
+}
+window.renderMarkdown=text=>renderBlocks(text,false).join('');
+window.renderMarkdownBlocks=(text,streaming=true)=>renderBlocks(text,streaming);

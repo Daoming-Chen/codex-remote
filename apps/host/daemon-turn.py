@@ -352,11 +352,206 @@ def turn_events(client, thread, turn):
                     resolve(token)
         yield event
 
+def change_goal(client, thread, expected, update, setup, progress):
+    if thread is None:
+        params = {k:setup[k] for k in ("cwd", "model", "projectId", "sandbox", "approvalPolicy") if setup.get(k)}
+        params.setdefault("cwd", str(Path.home()))
+        progress["sending"] = True
+        opened = client.call("thread/start", params)["thread"]
+        thread, cwd = opened["id"], opened["cwd"]
+        progress.update(thread=thread, sending=False)
+    else:
+        cwd = None
+    goal = client.call("thread/goal/get", {"threadId":thread})["goal"]
+    if (expected is None and goal is not None) or (expected is not None and
+            (goal is None or any(goal.get(k) != v for k, v in expected.items()))):
+        return {"conflict":True, "thread":thread, "goal":goal}
+    if setup:
+        if cwd is None:
+            opened = client.call("thread/resume", {"threadId":thread, "excludeTurns":True})["thread"]
+            cwd = opened["cwd"]
+        sandbox = setup["sandbox"]
+        policy = {"type":"readOnly","networkAccess":False}
+        if sandbox == "workspace-write":
+            policy = {"type":"workspaceWrite","writableRoots":[],"networkAccess":False,
+                      "excludeTmpdirEnvVar":True,"excludeSlashTmp":True}
+        elif sandbox == "danger-full-access":
+            policy = {"type":"dangerFullAccess"}
+        settings = {k:setup[k] for k in ("model", "effort", "approvalPolicy", "approvalsReviewer") if setup.get(k)}
+        if setup.get("serviceTier"):
+            settings["serviceTier"] = None if setup["serviceTier"] == "default" else setup["serviceTier"]
+        client.call("thread/settings/update", {"threadId":thread, "sandboxPolicy":policy, **settings})
+    if update.get("clear"):
+        cleared = client.call("thread/goal/clear", {"threadId":thread, "origin":"user"})
+        if not cleared["cleared"]:
+            return {"conflict":True, "thread":thread, "goal":client.call("thread/goal/get", {"threadId":thread})["goal"]}
+        goal = None
+    else:
+        progress["sending"] = True
+        goal = client.call("thread/goal/set", {"threadId":thread, "origin":"user", **update})["goal"]
+    return {"goal":goal, "thread":thread, "cwd":cwd}
+
+
+def expire_upload_receipts(cache, now):
+    """Clean abandoned chunks when the host next receives a file."""
+    import fcntl
+    import stat
+    from contextlib import ExitStack
+    flags = os.O_NOFOLLOW | os.O_RDONLY | os.O_DIRECTORY
+    with ExitStack() as handles:
+        cache_fd = os.open(cache, flags)
+        handles.callback(os.close, cache_fd)
+        sweep = os.open("uploads-cleanup", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=cache_fd)
+        handles.callback(os.close, sweep)
+        try:
+            fcntl.flock(sweep, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        if os.fstat(sweep).st_size and now-os.fstat(sweep).st_mtime < 60:
+            return
+        os.pwrite(sweep, b"1", 0)
+        for name in os.listdir(cache_fd):
+            if not name.startswith("upload-") or not name.endswith(".json"):
+                continue
+            try:
+                upload_id = str(uuid.UUID(name[7:-5]))
+                with ExitStack() as entry:
+                    def open_checked(path, options, parent=None):
+                        fd = os.open(path, options | os.O_NOFOLLOW, dir_fd=parent)
+                        entry.callback(os.close, fd)
+                        return fd
+                    receipt = open_checked(name, os.O_RDONLY, cache_fd)
+                    fcntl.flock(receipt, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if now-os.fstat(receipt).st_mtime < 15*60:
+                        continue
+                    metadata = json.loads(os.read(receipt, 8192))
+                    root, _, filename, size = metadata["scope"]
+                    root_fd = open_checked(root, flags)
+                    root_stat = os.fstat(root_fd)
+                    if metadata["rootIdentity"] != [root_stat.st_dev, root_stat.st_ino]:
+                        continue
+                    folder = ".codex-upload-"+upload_id
+                    folder_fd = open_checked(folder, flags, root_fd)
+                    file = open_checked(filename, os.O_RDWR | os.O_NONBLOCK, folder_fd)
+                    directory, info = os.fstat(folder_fd), os.fstat(file)
+                    if metadata["identity"] != [directory.st_dev, directory.st_ino, info.st_dev, info.st_ino]:
+                        continue
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size < size:
+                        os.ftruncate(file, 0)
+                        os.unlink(filename, dir_fd=folder_fd)
+                        os.rmdir(folder, dir_fd=root_fd)
+                    os.unlink(name, dir_fd=cache_fd)
+            except (OSError, ValueError, KeyError):
+                # Leave active or replaced entries alone.
+                continue
+
+
+def upload_attachment(client, args):
+    import fcntl
+    import re
+    import stat
+    from contextlib import ExitStack
+    name, total, offset = args["name"], args["total"], args["offset"]
+    if (not isinstance(name, str) or not name or len(name.encode("utf-8")) > 180 or
+            re.search(r'[<>:"/\\|?*\x00-\x1f\x7f]', name) or name.endswith((".", " ")) or
+            re.match(r"^(con|prn|aux|nul|clock\$|com[1-9¹²³]|lpt[1-9¹²³])(\.|$)", name, re.I)):
+        raise ValueError("文件名无效")
+    if type(total) is not int or not 0 <= total <= 64*1024*1024 or type(offset) is not int or not 0 <= offset <= total:
+        raise ValueError("文件大小或分块位置无效")
+    data = base64.b64decode(args["data"], validate=True)
+    if len(data) > 128*1024 or offset+len(data) > total or (not data and total):
+        raise ValueError("附件分块无效")
+    upload_id = str(uuid.UUID(args["id"]))
+    thread = args.get("threadId")
+    if thread:
+        thread = str(uuid.UUID(thread))
+        record = client.call("thread/read", {"threadId":thread, "includeTurns":False})["thread"]
+        if record["id"] != thread:
+            raise ValueError("主机会话不匹配")
+        root = record["cwd"]
+    else:
+        root = args["cwd"]
+        cursor = None
+        while True:
+            page = client.call("project/list", {"limit":100, **({"cursor":cursor} if cursor else {})})
+            if any(path["path"] == root for project in page["data"] for path in project["roots"]):
+                break
+            cursor = page.get("nextCursor")
+            if not cursor:
+                raise ValueError("请选择已登记的主机项目")
+    root = os.path.realpath(root)
+    folder = ".codex-upload-"+upload_id
+    cache = os.path.dirname(os.path.realpath(__file__))
+    expire_upload_receipts(cache, time.time())
+    nofollow = os.O_NOFOLLOW
+    directories = os.O_RDONLY | os.O_DIRECTORY | nofollow
+    with ExitStack() as handles:
+        def open_fd(path, flags, directory=None):
+            fd = os.open(path, flags, 0o600, dir_fd=directory)
+            handles.callback(os.close, fd)
+            return fd
+        root_fd = open_fd(root, directories)
+        root_stat = os.fstat(root_fd)
+        root_identity = [root_stat.st_dev, root_stat.st_ino]
+        cache_fd = open_fd(cache, directories)
+        receipt = open_fd("upload-"+upload_id+".json", os.O_RDWR | os.O_CREAT | nofollow, cache_fd)
+        fcntl.flock(receipt, fcntl.LOCK_EX)
+        raw = os.read(receipt, 8192)
+        metadata = json.loads(raw) if raw else None
+        scope = [root, thread, name, total]
+        if metadata is None:
+            if offset:
+                raise ValueError("需要从头上传文件")
+            os.mkdir(folder, 0o700, dir_fd=root_fd)
+        elif metadata["scope"] != scope or metadata.get("rootIdentity") != root_identity:
+            raise ValueError("附件目标已变化")
+        directory = open_fd(folder, directories, root_fd)
+        file = open_fd(name, os.O_RDWR | nofollow | os.O_NONBLOCK |
+                       (os.O_CREAT | os.O_EXCL if metadata is None else 0), directory)
+        directory_info, info = os.fstat(directory), os.fstat(file)
+        identity = [directory_info.st_dev, directory_info.st_ino, info.st_dev, info.st_ino]
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (metadata and metadata["identity"] != identity):
+            raise ValueError("附件存储位置已变化")
+        if metadata is None:
+            raw = json.dumps({"scope":scope, "identity":identity, "rootIdentity":root_identity}, ensure_ascii=False).encode("utf-8")
+            os.write(receipt, raw)
+            os.fsync(receipt)
+        current = info.st_size
+        if current > total or offset > current:
+            raise ValueError("附件分块位置不匹配")
+        overlap = min(len(data), current-offset)
+        if overlap and os.pread(file, overlap, offset) != data[:overlap]:
+            raise ValueError("重传的附件内容不一致")
+        written = overlap
+        while written < len(data):
+            count = os.pwrite(file, data[written:], offset+written)
+            if count == 0:
+                raise OSError("附件写入失败")
+            written += count
+        size = os.fstat(file).st_size
+        os.utime(receipt, None)
+        if size < total:
+            return {"complete":False, "offset":size}
+        os.fsync(file)
+        path = os.path.join(root, folder, name)
+        visible = os.stat(path, follow_symlinks=False)
+        if os.path.realpath(path) != path or (visible.st_dev, visible.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError("附件存储位置已变化")
+        return {"complete":True, "offset":size, "size":total, "path":path, "name":name, "root":root}
+
+
 def main():
     connecting = time.monotonic_ns()
     client = Connection()
     connected = time.monotonic_ns()
     try:
+        if sys.argv[1] == "--upload-attachment":
+            raw = sys.stdin.buffer.read(256*1024+1)
+            if len(raw) > 256*1024:
+                raise ValueError("附件分块过长")
+            args = json.loads(base64.b64decode(raw))
+            print(json.dumps(upload_attachment(client, args), ensure_ascii=False))
+            return
         if sys.argv[1] == "--voice":
             run_voice_session(client, sys.argv[2], Path(sys.argv[3]), json.load(sys.stdin))
             return
@@ -379,7 +574,8 @@ def main():
                     for offset in range(0, len(delta), 512):
                         print("TEXT "+json.dumps([params.get("turnId"), params.get("itemId"), delta[offset:offset+512]]), flush=True)
                 now = time.monotonic()
-                if method in ("turn/started", "turn/completed", "thread/status/changed", "serverRequest/resolved") or (
+                if method in ("turn/started", "turn/completed", "thread/status/changed", "serverRequest/resolved",
+                              "thread/goal/updated", "thread/goal/cleared") or (
                     method.startswith("item/") and now - last_update >= 1
                 ):
                     print("CHANGED", flush=True)
@@ -399,18 +595,15 @@ def main():
             print(json.dumps({"groups":groups}))
             return
         if sys.argv[1] == "--edit-goal":
-            thread = str(uuid.UUID(sys.argv[2]))
+            thread = None if sys.argv[2] == "-" else str(uuid.UUID(sys.argv[2]))
             change = json.loads(Path(sys.argv[3]).read_bytes())
-            goal = client.call("thread/goal/get", {"threadId":thread}).get("goal")
-            if not goal or any(goal.get(k)!=v for k,v in change["expected"].items()):
-                print(json.dumps({"conflict":True,"goal":goal}))
-                return
-            if change["update"].get("clear") is True:
-                cleared = client.call("thread/goal/clear", {"threadId":thread, "origin":"user"})
-                print(json.dumps({"cleared":cleared["cleared"]}))
-                return
-            result = client.call("thread/goal/set", {"threadId":thread, "origin":"user", **change["update"]})
-            print(json.dumps({"goal":result["goal"]}))
+            progress = {"thread":thread, "sending":False}
+            try:
+                result = change_goal(client, thread, change["expected"], change["update"], change.get("setup"), progress)
+            except (ValueError, OSError, RuntimeError, EOFError) as exc:
+                result = {"goalError":str(exc)[:350], "thread":progress["thread"],
+                          "retryable":isinstance(exc, ValueError) or not progress["sending"]}
+            print(json.dumps(result))
             return
         if sys.argv[1] == "--active-threads":
             cursor = None
@@ -534,7 +727,7 @@ def main():
                                    "retirementAt":(model.get("upgradeInfo") or {}).get("retirementAt"),
                                    "serviceTiers":[{"id":tier["id"],"name":tier["name"],"description":tier.get("description","")}
                                                    for tier in model.get("serviceTiers") or []],
-                                   "defaultEffort":model["defaultReasoningEffort"],
+                                   "defaultEffort":model["defaultReasoningEffort"], "defaultServiceTier":model.get("defaultServiceTier"),
                                    "efforts":[x["reasoningEffort"] for x in model["supportedReasoningEfforts"]]})
                 cursor = page.get("nextCursor")
                 if not cursor: break
@@ -589,10 +782,17 @@ def main():
         if selection.get("model"): overrides["model"] = selection["model"]
         if selection.get("effort"): overrides["config"] = {"model_reasoning_effort":selection["effort"]}
         sandbox = selection.get("sandbox","read-only")
+        preset = sandbox
+        if preset in ("auto-review", "ask-for-approval"):
+            sandbox = "workspace-write"
         if sandbox not in ("read-only","workspace-write","danger-full-access"): raise ValueError("未知的沙箱模式")
         approval = selection.get("approvalPolicy") or "never"
         if approval not in ("never","untrusted"): raise ValueError("未知审批策略")
         setup = {"sandbox":sandbox,"approvalPolicy":approval}
+        reviewer = "auto_review" if preset == "auto-review" else "user"
+        if preset in ("auto-review", "ask-for-approval"):
+            approval = "on-request"
+            setup.update(approvalPolicy=approval, approvalsReviewer=reviewer)
         opening = time.monotonic_ns()
         if previous == "-":
             if selection.get("projectId"): setup["projectId"] = selection["projectId"]
@@ -610,6 +810,7 @@ def main():
         elif sandbox == "danger-full-access":
             policy = {"type":"dangerFullAccess"}
         turn_policy = {"sandboxPolicy":policy,"approvalPolicy":approval}
+        turn_policy["approvalsReviewer"] = reviewer
         # A running Desktop daemon may resume a loaded thread with its previous defaults.
         for key in ("model", "effort"):
             if selection.get(key): turn_policy[key] = selection[key]

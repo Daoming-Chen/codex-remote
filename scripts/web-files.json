@@ -18,6 +18,7 @@
   "index.html",
   "markdown.js",
   "device-directory.mjs",
+  "project-file-content.mjs",
   "workbench-page.mjs",
   "server.mjs",
   "thread-api.py",

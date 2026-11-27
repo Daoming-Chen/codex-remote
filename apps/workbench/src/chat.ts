@@ -98,13 +98,21 @@ for(const c of db.chats){
   delete c.file;delete c.steering
 }
 const readingFiles=new WeakMap();
+const attachmentQueues=new WeakMap();
+const uploadProgress=new WeakMap();
+const savingGoals=new WeakSet();
 const catalogRequests=new Map();
 const projectCatalogs=new Map();
 const catalogPrefix='tim-ser-project-models:';
 const catalogRetryAfter=new Map();
 const projectPages=new Map();
+const uploadedPathPrefix='上传附件（主机文件）：';
 function promptWithFiles(text,files){
-  return [text,...files.filter(file=>!file.url).map(file=>file.remotePath?'主机项目路径：'+file.remotePath:'文件：'+file.name+'\n'+file.text)].filter(Boolean).join('\n\n')
+  return [text,...files.filter(file=>file.uploadPath||!file.url).map(file=>file.uploadPath?uploadedPathPrefix+file.uploadPath:
+    file.remotePath?'主机项目路径：'+file.remotePath:'文件：'+file.name+'\n'+file.text)].filter(Boolean).join('\n\n')
+}
+function submittedMessageText(text,files){
+  return [text,...files.map(file=>file.uploadPath?uploadedPathPrefix+file.uploadPath:'📎 '+file.name)].filter(Boolean).join('\n')
 }
 const current=()=>db.chats.find(c=>c.id===db.active);
 function persistDraft(chat){
@@ -638,28 +646,46 @@ document.fonts?.addEventListener('loadingdone',fitPrompt);
 function resize(){fitPrompt();updateSendControls()}
 function updateSendControls(){const box=$('prompt'),send=$('send'),c=current(),running=!!(c.pending||c.activeTurn),turn=c.pending?c.turn:c.activeTurn;
   updatePermissionLabel(c);
-  $('plan-mode').disabled=running;
-  $('steer').hidden=!(turn&&(box.value.trim()||c.files.length));
-  $('steer').disabled=!!c.steering||!!readingFiles.get(c);
-  send.disabled=c.historyMissing|| (running?(!turn||c.stopping===turn):!$('receiver-setup').hidden||!!readingFiles.get(c)||!(box.value.trim()||c.files.length));
-  send.title=c.historyMissing?'读取聊天记录后可发送':running?'停止当前任务':$('receiver-setup').hidden?'发送消息':'请先完成设备授权';
+  const savingGoal=savingGoals.has(c);
+  $('plan-mode').disabled=running||savingGoal;
+  for(const control of [$('attach-menu'),$('model-picker'),$('sandbox-label').parentElement])control.disabled=savingGoal;
+  const hasInput=!!(box.value.trim()||c.files.length),stop=running&&!hasInput;
+  send.disabled=c.historyMissing||savingGoal||!$('receiver-setup').hidden||
+    (running&&(!turn||c.stopping===turn))||(!stop&&(!hasInput||readingFiles.has(c)||!!c.steering));
+  send.title=c.historyMissing?'读取聊天记录后可发送':stop?'停止当前任务':$('receiver-setup').hidden?'发送消息':'请先完成设备授权';
   send.setAttribute('aria-label',send.title);
-  send.classList.toggle('is-stop',running);
-  send.type=running?'button':'submit';window.updateVoiceControl?.()}
+  send.classList.toggle('is-stop',stop);
+  send.type=stop?'button':'submit';window.updateVoiceControl?.()}
 function goalLabel(status){
-  return ({active:'进行中的目标',paused:'已暂停的目标',blocked:'受阻的目标',usageLimited:'达到用量限制',budgetLimited:'达到预算上限',complete:'已完成的目标'})[status]||'目标'
+  return ({active:'进行中的目标',paused:'已暂停的目标',blocked:'目标已停滞',usageLimited:'目标使用受限',budgetLimited:'目标受限',complete:'已达成目标'})[status]||'目标'
+}
+let goalClock;
+const goalTokenFormat=new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1});
+function updateGoalCounter(goal){
+  if(!goal?.objective)return;
+  if(['active','budgetLimited'].includes(goal.status)&&Number.isFinite(goal.tokenBudget)&&Number.isFinite(goal.tokensUsed)){
+    $('goal-time').textContent=goalTokenFormat.format(goal.tokensUsed)+' / '+goalTokenFormat.format(goal.tokenBudget);
+    return
+  }
+  const elapsed=goal.status==='active'&&Number.isFinite(goal.updatedAt)?Date.now()/1000-goal.updatedAt:0;
+  const seconds=Math.max(0,Math.floor(goal.timeUsedSeconds+elapsed)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds/60)%60;
+  $('goal-time').textContent=Number.isFinite(seconds)?[hours?hours+'h':'',hours||minutes?minutes+'m':'',seconds%60||!seconds?seconds%60+'s':''].filter(Boolean).join(' '):''
 }
 function renderGoal(c){
   const goal=c.goal,card=$('goal-card');card.hidden=!goal?.objective;
+  clearInterval(goalClock);
   if(card.hidden)return;
   $('goal-status').textContent=goalLabel(goal.status);$('goal-objective').textContent=goal.objective;
-  const seconds=Math.max(0,Math.floor(goal.timeUsedSeconds)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds/60)%60;
-  $('goal-time').textContent=Number.isFinite(seconds)?[hours?hours+'h':'',hours||minutes?minutes+'m':'',seconds%60||!seconds?seconds%60+'s':''].filter(Boolean).join(' '):'';
+  updateGoalCounter(goal);
+  if(goal.status==='active'&&!Number.isFinite(goal.tokenBudget)&&Number.isFinite(goal.updatedAt)&&!document.hidden){
+    goalClock=setInterval(()=>updateGoalCounter(current().goal),1000)
+  }
   $('goal-actions').hidden=c.archived||!c.thread||!Number.isFinite(goal.createdAt);
   const toggle=$('goal-toggle'),paused=goal.status==='paused';
   toggle.hidden=!paused&&goal.status!=='active';toggle.title=paused?'继续目标':'暂停目标';
   toggle.setAttribute('aria-label',toggle.title);toggle.replaceChildren(icon(paused?'play':'pause'))
 }
+document.addEventListener('visibilitychange',()=>renderGoal(current()));
 function goalDialog(action){
   const c=current(),g=c.goal;if(!g)return;
   const body=modal(goalLabel(g.status));body.append(element('p','goal-full',g.objective));
@@ -699,6 +725,63 @@ $('goal-details').onclick=()=>goalDialog();
 $('goal-edit').onclick=()=>goalDialog('edit');
 $('goal-clear').onclick=()=>goalDialog('clear');
 $('goal-toggle').onclick=()=>goalDialog('toggle');
+function enableGoalComposer(){
+  const c=current();
+  if(c.archived||c.pending||c.activeTurn||savingGoals.has(c)){toast('请在当前任务结束后设置目标');return false}
+  c.goalMode=true;c.collaborationMode='default';
+  closeDialog();save();composer();promptBox.focus();return true
+}
+function exitGoalComposer(){
+  const c=current();if(savingGoals.has(c))return;
+  delete c.goalMode;closeDialog();save();composer();promptBox.focus()
+}
+$('goal-mode').onclick=exitGoalComposer;
+function submitGoal(c,objective){
+  const draft=c.draft,previous=c.goal;
+  if(!objective||savingGoals.has(c))return;
+  if(c.pending||c.activeTurn){toast('请在当前任务结束后设置目标');return}
+  if(c.files.length||readingFiles.has(c)){toast('请先移除附件，再设置目标');return}
+  const expected=previous?{objective:previous.objective,status:previous.status,createdAt:previous.createdAt}:null;
+  const options={thread:c.thread||null,cwd:c.cwd||null,projectId:c.projectId||null,
+    sandbox:c.sandbox||'read-only',approvalPolicy:c.approvalPolicy||'never',...turnModelOptions(c),expected,objective,activate:true};
+  const signature=JSON.stringify(options);
+  const valid=()=>current()===c&&c.draft===draft&&c.goalMode&&!c.archived&&!c.pending&&!c.activeTurn&&!c.files.length;
+  async function activate(){
+    if(!valid()||savingGoals.has(c))return;
+    savingGoals.add(c);composer();
+    try{
+      const response=await deviceFetch('/api/capabilities');
+      if(!response.ok)throw Error('无法读取主机支持的聊天模式');
+      if(!(await response.json()).goalMode)throw Error('当前主机连接不支持设置目标。草稿已保留。');
+      if(!valid())return;
+      if(await nativePermissions()&&!supportsNativePermission(c)){if(valid())void permissionView(true);return}
+      if(!valid())return;
+      if(c.goalRequest?.signature!==signature)c.goalRequest={id:crypto.randomUUID(),signature};
+      save();
+      const result=await deviceFetch('/api/thread-goal',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...options,id:c.goalRequest.id}),signal:AbortSignal.timeout(30000)});
+      const data=await result.json();
+      if(!result.ok){
+        if(Object.hasOwn(data,'goal')){c.goal=data.goal;delete c.goalRequest;save()}
+        throw Error(data.error||'无法设置目标')
+      }
+      if(!data.thread||!data.goal?.objective)throw Error('主机未确认目标。请重试。');
+      if(!c.thread&&!c.messages.length)c.title=objective.slice(0,45);
+      c.thread=data.thread;c.cwd=data.cwd||c.cwd;c.shared=true;c.goal=data.goal;c.updated=Date.now();
+      if(c.draft===draft)c.draft='';
+      delete c.goalMode;
+      delete c.goalRequest;save();renderSidebarHistory();
+      if(current()===c){composer();messages(false);syncThreadWatch();void refreshCurrentHistory(c,true)}
+    }catch(error){if(current()===c)toast(error.message||'无法设置目标')}
+    finally{savingGoals.delete(c);if(current()===c)composer()}
+  }
+  if(previous&&previous.status!=='complete'){
+    const body=modal('替换当前目标吗？');
+    body.append(element('p','','这会保留聊天，但会用你当前在输入框中的文本替换已保存的目标'),
+      element('p','goal-full',objective),
+      row('替换目标','goal-target',()=>{closeDialog();void activate()}),row('取消','x',closeDialog))
+  }else void activate()
+}
 function attachmentImage(url,name='图片附件'){
   const img=element('img','attachment-image');img.src=url;img.alt=name;
   const trigger=element('button','attachment-preview');trigger.type='button';
@@ -726,7 +809,8 @@ function openAttachmentPreview(url: string,name: string){
         after.top+y*after.height/before.height-targetY)
     }
     zoom.onclick=toggleSize;full.onclick=toggleSize;
-    body.append(viewport,zoom)
+    body.append(viewport,zoom);
+    return body
 }
 function renderProjectName(c){
   for(const name of document.querySelectorAll('.project-name')){name.textContent=!c.cwd&&!c.projectId&&name.closest(".hostline")?"选择项目":projectName(c.cwd,c.projectId);name.title=c.cwd||name.textContent}
@@ -845,11 +929,13 @@ function renderDraft(chat){
   renderedDraftChat=chat.id
 }
 function composerPlaceholder(chat,followUp){
+  if(chat.goalMode)return '描述你的目标，并设定可衡量的预期成果，以取得最佳效果';
   if(chat.collaborationMode==='plan')return '描述你的任务以生成计划…';
   return followUp?'和 Codex 一起工作':'随心输入'
 }
-function composer(){const c=current();promptBox.placeholder=composerPlaceholder(c,!!c.thread||!!c.messages.length);archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();WorkbenchComponents.renderAttachments($('attachment'),{
-    files:c.files,host:receiverName,preview:openAttachmentPreview,
+function composer(){const c=current();promptBox.placeholder=composerPlaceholder(c,!!c.thread||!!c.messages.length);archiveComposer(c);pendingQuestions(c);$('plan-mode').hidden=c.collaborationMode!=='plan';$('goal-mode').hidden=!c.goalMode;$('goal-mode').disabled=savingGoals.has(c);renderGoal(c);modelLabel(c);renderProjectName(c);renderDraft(c);updateEnterHint();WorkbenchComponents.renderAttachments($('attachment'),{
+    files:c.files,host:receiverName,preview:openAttachmentPreview,progress:uploadProgress.get(c),
+    openFile:file=>openUploadedFile(c,c,file.uploadPath,file.uploadRoot),
     remove(file){c.files=c.files.filter(item=>item!==file);save();composer()}
   });resize()}
 let readingReply=null;
@@ -1016,22 +1102,23 @@ function mountSideChat(container,owner,chat){
   const empty=element('div','side-chat-empty');
   empty.append(icon('side-chat-new'),element('strong','','侧边聊天'),element('span','','这里继续提问，不会打断主聊天'));
   field.placeholder=composerPlaceholder(chat,true);field.setAttribute('aria-label','在侧边聊天中提问');
-  field.addEventListener('paste',event=>pasteComposerImages(event,chat));
+  field.addEventListener('paste',event=>pasteComposerFiles(event,chat));
+  attachDropTarget(form,()=>chat);
   field.value=chat.draft;field.oninput=()=>{chat.draft=field.value;fitEditor(field);save();sync()};
   field.onkeydown=event=>{
     if(event.key==='Enter'&&!event.shiftKey&&!isCompositionKey(event)&&(event.ctrlKey||event.metaKey||sendsWithEnter(field.value))){
-      event.preventDefault();if(!event.repeat&&!chat.pending&&!externalTurn)form.requestSubmit()
+      event.preventDefault();if(!event.repeat&&(field.value.trim()||chat.files?.length))form.requestSubmit()
     }
   };
   transcript.setAttribute('aria-label','侧边聊天记录');status.setAttribute('role','status');
   transcript.addEventListener('click',event=>handleAnswerLink(event,chat,owner));
   const questions=element('div','side-chat-questions');
   const attachments=element('div','side-attachments');
-  let renderedFiles;
+  let renderedFiles,renderedProgress;
   const picker=$('file').cloneNode(false);picker.removeAttribute('id');
   picker.onchange=()=>{
     const batch=Array.from(picker.files);picker.value='';
-    void addTextFiles(batch,true,chat)
+    void addLocalFiles(batch,chat)
   };
   const actions=element('div','side-chat-actions');
   send.type='submit';
@@ -1042,12 +1129,7 @@ function mountSideChat(container,owner,chat){
   modelTrigger.querySelector('#model-label').removeAttribute('id');
   modelTrigger.classList.add('side-model-picker');modelTrigger.setAttribute('aria-expanded','false');
   modelTrigger.onclick=()=>modelPicker(false,false,chat,modelTrigger);
-  const supplement=element('button','mode','补充要求');supplement.type='button';
-  supplement.onclick=async()=>{
-    const shared=!chat.pending;
-    if(await steer(chat,shared?externalTurn:null)&&shared)void refreshHistory()
-  };
-  actions.append(attach,modelTrigger,supplement,send);
+  actions.append(attach,modelTrigger,send);
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   const entries=[];
@@ -1115,7 +1197,7 @@ function mountSideChat(container,owner,chat){
       if(entry.text!==text||entry.images!==images||entry.streaming!==streaming){
         if(role==='user'){
           entry.message.replaceChildren();
-          if(text)entry.message.append(userMessageText(text));
+          if(text)entry.message.append(userMessageText(text,chat,owner));
           for(const url of images||[])entry.message.append(attachmentImage(url))
         }else{
           entry.message.dataset.turn=row.turn||'';
@@ -1132,20 +1214,22 @@ function mountSideChat(container,owner,chat){
     for(const obsolete of entries.splice(rows.length)){obsolete.message.remove();obsolete.actions?.remove()}
     if(atEnd)transcript.scrollTop=transcript.scrollHeight;
     if(field.value!==chat.draft){field.value=chat.draft;fitEditor(field)}
-    if(renderedFiles!==chat.files){
+    if(renderedFiles!==chat.files||renderedProgress!==uploadProgress.get(chat)){
       renderedFiles=chat.files;
+      renderedProgress=uploadProgress.get(chat);
       WorkbenchComponents.renderAttachments(attachments,{files:chat.files||[],host:receiverName,preview:openAttachmentPreview,
+        progress:renderedProgress,openFile:file=>openUploadedFile(chat,owner,file.uploadPath,file.uploadRoot),
         remove(file){chat.files=chat.files.filter(item=>item!==file);save();sync()}
       });
-      attachments.hidden=!chat.files?.length
+      attachments.hidden=!chat.files?.length&&!renderedProgress
     }
     status.textContent=chat.error||(openingSideThreads.has(chat)?'正在关联主聊天…':chat.pending?chat.phase:'');
     const turn=chat.pending?chat.turn:externalTurn,running=!!(chat.pending||turn);
-    supplement.hidden=!(turn&&(field.value.trim()||chat.files?.length));
-    supplement.disabled=!!chat.steering||readingFiles.has(chat)||chat.stopping===turn;
-    send.setAttribute('aria-label',running?'停止':'发送');send.title=send.getAttribute('aria-label');
-    send.replaceChildren(running?element('span','side-chat-stop'):icon('arrow-up'));
-    send.disabled=running?!turn||chat.stopping===turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
+    const hasInput=!!(field.value.trim()||chat.files?.length),stop=running&&!hasInput;
+    send.setAttribute('aria-label',stop?'停止':'发送');send.title=send.getAttribute('aria-label');
+    send.replaceChildren(stop?element('span','side-chat-stop'):icon('arrow-up'));
+    send.disabled=openingSideThreads.has(chat)||(running&&(!turn||chat.stopping===turn))||
+      (!stop&&(!hasInput||readingFiles.has(chat)||!!chat.steering));
     if(revealSubmission){
       const question=entries[rows.findIndex(row=>row.submissionId===revealSubmission)]?.message;
       if(question){
@@ -1274,6 +1358,10 @@ function mountSideChat(container,owner,chat){
     event.preventDefault();if(send.disabled)return;
     if(chat.pending||externalTurn){
       const local=!!chat.pending,turn=local?chat.turn:externalTurn;
+      if(field.value.trim()||chat.files?.length){
+        if(await steer(chat,local?null:turn)&&!local)void refreshHistory();
+        return
+      }
       const path=local?'/api/interrupt/'+chat.pending:'/api/thread-interrupt/'+chat.thread+'/'+turn;
       chat.stopping=turn;sync();
       try{
@@ -1299,7 +1387,7 @@ function mountSideChat(container,owner,chat){
       const id=crypto.randomUUID();chat.pending=id;chat.preview='';chat.phase='正在发送…';
       chat.outbox={id,draft,files,options:{expectedThread:chat.thread||null,parent:chat.parent,cwd:chat.cwd||null,projectId:chat.projectId||null,
         collaborationMode:chat.collaborationMode||null,approvalPolicy:owner.approvalPolicy||'never',sandbox:owner.sandbox||'read-only',...turnModelOptions(chat)}};
-      chat.messages.push({role:'user',text:[draft,...files.map(file=>'📎 '+file.name)].filter(Boolean).join('\n'),
+      chat.messages.push({role:'user',text:submittedMessageText(draft,files),
         images:files.filter(file=>file.url).map(file=>file.url),submissionId:id});
       submittedId=id;
       chat.files=chat.files?.filter(file=>!files.includes(file))||[];
@@ -1851,15 +1939,37 @@ function resolveChatFile(path,cwd){
 function chatFileTarget(href){
   if(!href||href.startsWith('//')||href.startsWith('#')||href.startsWith('?'))return;
   const [rawPath,fragment]=href.split('#');
-  const suffix=/:([1-9]\d*)(?::[1-9]\d*)?$/.exec(rawPath);
+  const suffix=/:([1-9]\d*)(?::([1-9]\d*))?(?:-([1-9]\d*)(?::([1-9]\d*))?)?$/.exec(rawPath);
   const filename=suffix?rawPath.slice(0,suffix.index):rawPath;
   if(/^[a-z][a-z0-9+.-]*:/i.test(filename)&&!(/^[a-z]:(?:[\\/]|%5c)/i.test(filename)))return;
-  const line=suffix?.[1]||/^L([1-9]\d*)(?:-L?[1-9]\d*)?$/.exec(fragment||'')?.[1];
-  return {filename,line}
+  const fragmentLines=/^L([1-9]\d*)(?:-L?([1-9]\d*))?$/.exec(fragment||'');
+  return {filename,line:suffix?.[1]??fragmentLines?.[1],column:suffix?.[2],
+    endLine:suffix?.[3]??fragmentLines?.[2],endColumn:suffix?.[4]}
 }
 $('messages').addEventListener('click',event=>handleAnswerLink(event,current(),current()));
+function openFileAtPath(owner,root,path,line=null){
+  if(!root)return false;
+  const prefix=resolveChatFile(root,root).replace(/\/+$/,'')+'/';
+  const normalized=resolveChatFile(path,root);
+  const windows=isWindowsRoot(root);
+  if(!(windows?normalized.toLowerCase():normalized).startsWith(windows?prefix.toLowerCase():prefix)||normalized.length===prefix.length)return false;
+  owner.projectFile={cwd:root,path:normalized.slice(prefix.length),line:Number(line)||null};
+  $('workbench').querySelector(':scope > .project-files-panel')?.remove();
+  openRecord(projectFilesTab);return true
+}
+function openUploadedFile(chat,owner,path,root=chat.cwd){
+  if(!openFileAtPath(owner,root,path))toast('无法在当前项目中打开此附件')
+}
 function handleAnswerLink(event,chat,owner){
   const link=event.target.closest('.answer a,.live-answer a');
+  const thumbnail=link?.querySelector('.reply-project-image');
+  if(thumbnail){
+    event.preventDefault();
+    const body=openAttachmentPreview(thumbnail.src,thumbnail.alt);
+    const source=projectImageSources.get(thumbnail);
+    if(source)body.append(projectDownloadButton(source.request,source.data));
+    return
+  }
   const href=link?.getAttribute('href');
   if(hostBrowserAddress(href)){
     event.preventDefault();owner.browserAddress=href;
@@ -1873,6 +1983,13 @@ function handleAnswerLink(event,chat,owner){
   let path;
   const turn=link.closest('.answer,.live-answer').dataset.turn;
   try{path=resolveChatFile(decodeURIComponent(filename),chat.cwd)}catch{toast('文件路径编码无效');return}
+  if(!line && /\.(?:apk|zip|tgz|gz|7z|rar|pdf|docx?|xlsx?|pptx?|bin)$/i.test(path) && projectRootFor(path,[chat.cwd].filter(Boolean))){
+    const body=modal(path.split('/').pop());
+    const root=projectRootFor(chat.cwd,(db.hostProjects||[]).flatMap(project=>project.roots))||chat.cwd;
+    body.append(projectDownloadButton({root,path,workspace:chat.cwd,thread:chat.thread,workingTree:true}));
+    body.append(row('查看文件','file-text',()=>{closeDialog();openFileAtPath(owner,chat.cwd,path,line)}));
+    return
+  }
   const pathKey=name=>/^[a-z]:\//i.test(name)?name.toLowerCase():name;
   const rows=[...chat.messages,...(orderedSnapshots.get(chat)||[])];
   const items=rows.filter(row=>row.turn===turn).flatMap(row=>row.items||[]);
@@ -1881,12 +1998,7 @@ function handleAnswerLink(event,chat,owner){
     const match=item.changes?.find(change=>[change.path,change.kind?.move_path].some(name=>name&&pathKey(resolveChatFile(name,chat.cwd))===pathKey(path)));
     if(match){openChangedFile(item,match.path,line);return}
   }
-  const cwdPrefix=chat.cwd&&resolveChatFile(chat.cwd,chat.cwd).replace(/\/+$/,'')+'/';
-  if(cwdPrefix&&pathKey(path).startsWith(pathKey(cwdPrefix))&&path.length>cwdPrefix.length){
-    owner.projectFile={cwd:chat.cwd,path:path.slice(cwdPrefix.length),line:Number(line)||null};
-    $('workbench').querySelector(':scope > .project-files-panel')?.remove();
-    openRecord(projectFilesTab);return
-  }
+  if(openFileAtPath(owner,chat.cwd,path,line))return;
   const body=modal('主机文件');
   body.append(element('p','',path));
   const roots=(db.hostProjects||[]).flatMap(project=>project.roots);
@@ -1901,10 +2013,15 @@ function handleAnswerLink(event,chat,owner){
   preview.onclick=async()=>{
     preview.disabled=true;preview.textContent='正在读取主机文件…';
     try{
-      const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,path,thread:chat.thread})});
+      const request={root,path,thread:chat.thread};
+      const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
       const data=await response.json();
-      if(!response.ok||typeof data.text!=='string')throw Error(data.error||'无法读取文件');
+      if(!response.ok)throw Error(data.error||'无法读取文件');
       if(!preview.isConnected)return;
+      if(typeof data.text!=='string'){
+        const result=element('div');appendBinaryPreview(result,request,data);
+        result.append(projectFileActions(request,data));preview.replaceWith(result);return
+      }
       const pre=element('pre','snapshot-code'),lines=data.text.split(/\r?\n/);
       const version=data.source==='working-tree'?'工作区文件':'Git 暂存区版本';
       const selected=Number(line);
@@ -1917,15 +2034,77 @@ function handleAnswerLink(event,chat,owner){
       }else{
         pre.textContent=data.text;preview.replaceWith(element('p','quiet',line?version+' · 指定行已超出文件范围':version),pre)
       }
+      body.append(projectFileActions(request,data))
     }catch(error){preview.disabled=false;preview.textContent='重新读取主机文件';if(preview.isConnected)toast(error.message)}
   }
 
 }
+const projectImageSources=new WeakMap();
+const imagePreviews=new IntersectionObserver(entries=>{
+  for(const entry of entries){
+    if(!entry.isIntersecting)continue;
+    imagePreviews.unobserve(entry.target);
+    void loadProjectImage(entry.target)
+  }
+});
+const imageChanges=new MutationObserver(records=>{
+  for(const record of records){
+    for(const [nodes,added] of [[record.removedNodes,false],[record.addedNodes,true]]){
+      for(const node of nodes){
+        if(node.nodeType!==1)continue;
+        const links=node.matches('a[data-project-image]')?[node]:node.querySelectorAll('a[data-project-image]');
+        for(const link of links){
+          if(added&&link.isConnected&&!link.querySelector('img'))imagePreviews.observe(link);
+          else if(!link.isConnected)imagePreviews.unobserve(link)
+        }
+      }
+    }
+  }
+});
+for(const id of ['messages','workbench'])imageChanges.observe($(id),{childList:true,subtree:true});
+async function loadProjectImage(link){
+  if(!link.closest('.answer,.live-answer'))return;
+  const chat=link.closest('.side-chat')?visibleSideChat?.chat:current();
+  if(!chat?.cwd)return;
+  try{
+    const file=resolveChatFile(decodeURIComponent(link.getAttribute('href')),chat.cwd);
+    const root=resolveChatFile(chat.cwd,chat.cwd).replace(/\/+$/,'')+'/';
+    const normalize=value=>isWindowsRoot(root)?value.toLowerCase():value;
+    if(!normalize(file).startsWith(normalize(root)))return;
+    const projectRoot=projectRootFor(chat.cwd,(db.hostProjects||[]).flatMap(project=>project.roots))||chat.cwd;
+    const request={root:projectRoot,workspace:chat.cwd,path:projectEntryPath(chat.cwd,file.slice(root.length)),thread:chat.thread,workingTree:true};
+    const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+    if(!response.ok||!link.isConnected)return;
+    const data=await response.json();
+    if(!link.isConnected||!['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/avif'].includes(data.mime)||typeof data.data!=='string')return;
+    const img=element('img','reply-project-image');img.alt=link.textContent;
+    projectImageSources.set(img,{request,data:{version:data.version,mime:data.mime}});
+    img.onload=()=>{if(link.isConnected){link.replaceChildren(img);link.title=img.alt}};
+    img.src='data:'+data.mime+';base64,'+data.data;
+  }catch{/* The file link remains available when inline preview fails. */}
+}
 function decorateAnswer(body,wrapped,startIndex){
   for(const link of body.querySelectorAll('a')){
     link.rel='noopener noreferrer';link.target='_blank';
-    if(chatFileTarget(link.getAttribute('href'))){
-      link.classList.add('chat-file-link');link.prepend(icon('folder-open'))
+    const href=link.getAttribute('href'),file=chatFileTarget(href);
+    if(file){
+      const {filename,line,column,endLine,endColumn}=file;
+      const location=[];
+      if(line)location.push(endLine&&line!==endLine?`lines ${line}-${endLine}`:`line ${line}`);
+      if(column)location.push(endColumn&&column!==endColumn?`columns ${column}-${endColumn}`:`column ${column}`);
+      const suffix=location.length?' ('+location.join(', ')+')':'';
+      const basename=filename.split(/[\\/]/).pop()||filename;
+      const label=link.textContent.trim();
+      if(!label||label===href||label===filename+suffix)link.textContent=basename+suffix;
+      else if(suffix&&!label.endsWith(suffix)){
+        const labelFile=chatFileTarget(label);
+        if(labelFile?.line&&labelFile.filename.split(/[\\/]/).pop()===basename)link.textContent=labelFile.filename;
+        link.append(suffix)
+      }
+      const name=/\.ts$/i.test(filename)?'file-typescript':/\.toml$/i.test(filename)?'file-config':
+        /[\\/]$/.test(filename)?'folder-closed':'file-reference';
+      link.title=filename+suffix;
+      link.classList.add('chat-file-link');link.prepend(icon(name))
     }
   }
   let index=startIndex;
@@ -2016,8 +2195,19 @@ const userTextObserver=new ResizeObserver(entries=>{
     update(false);container.append(toggle)
   }
 });
-function userMessageText(value){
+function userMessageText(value,chat=current(),owner=current()){
   const body=element('div','user-text'),viewport=element('div','user-text-viewport'),text=element('div','',value);
+  if(value.includes(uploadedPathPrefix)){
+    text.replaceChildren();
+    value.split('\n').forEach((line,i)=>{
+      if(i)text.append('\n');
+      if(!line.startsWith(uploadedPathPrefix)){text.append(line);return}
+      const path=line.slice(uploadedPathPrefix.length),name=path.split(/[\\/]/).pop()||path;
+      const file=element('button','history-attachment',name);file.type='button';
+      file.prepend(icon('file-text'));file.title=path;file.setAttribute('aria-label','打开主机文件 '+name);
+      file.onclick=()=>openUploadedFile(chat,owner,path);text.append(file)
+    })
+  }
   viewport.append(text);body.append(viewport);userTextObserver.observe(text);
   return body
 }
@@ -2593,6 +2783,13 @@ function settings(restore=false){
   if($('prompt').hasAttribute('data-android-ime')){
     body.append(element('div','preference-label','发送快捷键'),element('p','quiet','回车换行。点发送按钮，或用外接键盘按 Ctrl + Enter 发送。'))
   }else body.append(label,select);
+  const contextLabel=element('label','context-usage-preference'),contextToggle=element('input');
+  contextToggle.type='checkbox';contextToggle.setAttribute('role','switch');
+  contextToggle.checked=db.showContextWindowUsage===true;
+  contextToggle.onchange=()=>{
+    db.showContextWindowUsage=contextToggle.checked;save();renderContextUsage(current().usage)
+  };
+  contextLabel.append(contextToggle,'显示上下文使用情况');body.append(contextLabel);
   body.append(element('div','preference-label','外观'));
   const themes=element('div','settings-themes');
   body.append(themes);
@@ -2680,6 +2877,7 @@ function attachmentMenu(anchor=$('attach-menu'),picker=$('file'),chat=current(),
   item('添加本地文件','file-text',()=>{closeDialog();picker.click()});
   item('添加远程文件','folder-open',()=>remoteFilePicker(chat,field));
   if(chat===current()&&!chat.activeTurn&&!chat.pending&&(!nativePermissionMode||chat.collaborationMode==='plan'))item(chat.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode);
+  if(chat===current()&&!chat.activeTurn&&!chat.pending&&!savingGoals.has(chat))item(chat.goalMode?'退出目标模式':'目标','goal-target',()=>chat.goalMode?exitGoalComposer():enableGoalComposer());
   menu.firstElementChild.focus();
   menu.onkeydown=e=>{
     if(!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;
@@ -2708,6 +2906,64 @@ async function projectDirectory(root,relative,thread,workspace=root,signal){
   const response=await deviceFetch('/api/project-directories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root,relative,thread,workspace}),signal});
   const data=await response.json();if(!response.ok)throw Error(data.error||'未能读取目录');
   return data
+}
+async function downloadProjectBlob(request,version){
+  const response=await deviceFetch('/api/project-file-download',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({...request,version})});
+  if(!response.ok)throw Error((await response.json()).error||'无法下载文件');
+  return response.blob()
+}
+function projectFileActions(request,data){
+  const actions=element('div','project-file-actions');
+  if(data.downloadError){actions.append(element('p','quiet',data.downloadError));return actions}
+  const name=request.path.split(/[\\/]/).pop(), mime=data.mime||'application/octet-stream';
+  const payload=JSON.stringify({...request,version:data.version});
+  if(typeof window.ReceiverFiles?.open==='function'){
+    actions.append(row('用其他应用打开','file-text',()=>window.ReceiverFiles.open(name,mime,payload)));
+  }
+  actions.append(projectDownloadButton(request,data));return actions
+}
+function projectDownloadButton(request,data={},compact=false){
+  const name=request.path.split(/[\\/]/).pop(),mime=data.mime||'application/octet-stream';
+  const payload=JSON.stringify({...request,version:data.version});
+  const download=async()=>{
+    if(typeof window.ReceiverFiles?.save==='function'){window.ReceiverFiles.save(name,mime,payload);return}
+    saveFile.disabled=true;
+    try{
+      const blob=await downloadProjectBlob(request,data.version);
+      const url=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=url;link.download=name;document.body.append(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000)
+    }catch(error){toast(error.message)}finally{saveFile.disabled=false}
+  };
+  const saveFile=compact?btn('下载 '+name,'download',download):row('保存文件','download',download);
+  return saveFile
+}
+function appendBinaryPreview(result,request,data){
+  if(!Number.isSafeInteger(data.bytes)||data.bytes<0)throw Error('主机返回的文件信息无效');
+  const name=request.path.split(/[\\/]/).pop();
+  const size=new Intl.NumberFormat().format(data.bytes)+' 字节';
+  result.append(element('p','quiet',size));
+  if(!['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/avif'].includes(data.mime))return;
+  const image=element('img','project-image');
+  image.alt=name;
+  image.onerror=()=>image.replaceWith(element('p','quiet','图片无法解码，可保存原文件。'));
+  if(typeof data.data==='string'){
+    image.src='data:'+data.mime+';base64,'+data.data;
+    result.append(image);return
+  }
+  if(data.downloadError)return;
+  const show=row('预览原图','file-text',async()=>{
+    show.disabled=true;
+    try{
+      const blob=await downloadProjectBlob(request,data.version);
+      if(!show.isConnected)return;
+      const url=URL.createObjectURL(blob);
+      for(const event of ['load','error'])image.addEventListener(event,()=>URL.revokeObjectURL(url),{once:true});
+      image.src=url;show.replaceWith(image)
+    }catch(error){toast(error.message);show.disabled=false}
+  });
+  result.append(show)
 }
 function mountProjectFiles(detail,chat){
   const panel=element('section','project-explorer'),toolbar=element('div','project-explorer-toolbar');
@@ -2745,11 +3001,17 @@ function mountProjectFiles(detail,chat){
         if(trigger)back.focus({preventScroll:true});
         const result=element('div');reader.append(result);notice(result,'正在读取文件…');
         try{
-          const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({root,path:projectEntryPath(root,relative),thread:chat.thread,workspace:cwd,workingTree:true})});
+          const request={root,path:projectEntryPath(root,relative),thread:chat.thread,workspace:cwd,workingTree:true};
+          const response=await deviceFetch('/api/project-file-snapshot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
           const data=await response.json();
-          if(!response.ok||typeof data.text!=='string')throw Error(data.error||'无法读取文件');
+          if(!response.ok)throw Error(data.error||'无法读取文件');
           if(!active()||run!==generation||id!==readId)return;
+          const actions=projectFileActions(request,data);
+          if(typeof data.text!=='string'){
+            result.replaceChildren();
+            appendBinaryPreview(result,request,data);
+            result.append(actions);return
+          }
           const pre=element('pre','snapshot-code',data.text);result.replaceChildren(pre);
           if(/\.(?:md|markdown)$/i.test(relative)){
             const preview=element('article','markdown project-markdown');
@@ -2783,6 +3045,7 @@ function mountProjectFiles(detail,chat){
               mark.scrollIntoView({block:'nearest'})
             }else notice(result,'指定行已超出文件范围')
           }
+          result.append(actions);
         }catch(error){
           if(active()&&run===generation&&id===readId){result.replaceChildren();notice(result,error.message,()=>openFile(relative,trigger,line))}
         }
@@ -2803,7 +3066,10 @@ function mountProjectFiles(detail,chat){
             if(selected?.cwd===cwd&&(base?base+'/'+selected.path:selected.path).startsWith(folderPath+'/'))folder.open=true;
           }
           for(const name of data.files||[]){
-            const file=row(name,'file-text',()=>openFile(path(name),file));container.append(file)
+            const entry=element('div','project-file-entry');
+            const file=row(name,'file-text',()=>openFile(path(name),file));
+            entry.append(file,projectDownloadButton({root,path:projectEntryPath(root,path(name)),thread:chat.thread,workspace:cwd,workingTree:true},{},true));
+            container.append(entry)
           }
           if(data.truncated)notice(container,'仅显示部分目录条目');
           else if(!data.files)notice(container,'此主机仅提供子目录列表');
@@ -2910,15 +3176,15 @@ async function remoteFilePicker(c,composerField){
   else try{const page=await directoryPage(null);if(visible())showRoots(page.projects||[])}catch(err){if(visible())status.textContent=err.message}
 }
 async function togglePlanMode(){
-  const c=current();if(c.archived||c.pending||c.activeTurn)return;
+  const c=current();if(c.archived||c.pending||c.activeTurn||savingGoals.has(c))return;
   try{
     if(c.collaborationMode!=='plan'){
       const res=await deviceFetch('/api/capabilities');
       if(!res.ok)throw Error('无法读取当前主机支持的聊天模式');
       if(!(await res.json()).planMode)throw Error('当前主机连接不支持计划模式');
     }
-    if(c!==current()||c.pending||c.activeTurn||c.archived)return;
-    c.collaborationMode=c.collaborationMode==='plan'?'default':'plan';save();closeDialog();composer();$('prompt').focus()
+    if(c!==current()||c.pending||c.activeTurn||c.archived||savingGoals.has(c))return;
+    c.collaborationMode=c.collaborationMode==='plan'?'default':'plan';delete c.goalMode;save();closeDialog();composer();$('prompt').focus()
   }catch(e){toast(e.message)}
 }
 function positionSidebarMenu(anchor){
@@ -3510,6 +3776,7 @@ function pluginsView(restore=false){
 }
 let drawerOpener;
 function dismissWorkbenchOverlay(){
+  if(!$('context-usage-detail').hidden){hideContextUsage();return true}
   if(!document.dispatchEvent(new Event('workbench-back',{cancelable:true})))return true;
   const flyout=document.querySelector('.speed-flyout');
   if(WorkbenchComponents.dismissSpeedMenu(flyout)){
@@ -3838,14 +4105,16 @@ document.addEventListener('keydown',e=>{
 });
 $('file').onchange=async()=>{
   const input=$('file'),batch=Array.from(input.files);input.value='';
-  await addTextFiles(batch)
+  await addLocalFiles(batch)
 };
-const composeBox=$('composer');
-composeBox.addEventListener('dragover',e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault()});
-composeBox.addEventListener('drop',e=>{
-  if(!e.dataTransfer.types.includes('Files'))return;
-  e.preventDefault();void addTextFiles(Array.from(e.dataTransfer.files))
-});
+function attachDropTarget(form,getChat){
+  form.addEventListener('dragover',e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault()});
+  form.addEventListener('drop',e=>{
+    if(!e.dataTransfer.types.includes('Files'))return;
+    e.preventDefault();void addLocalFiles(Array.from(e.dataTransfer.files),getChat())
+  })
+}
+attachDropTarget($('composer'),current);
 const maxImageBytes=256*1024;
 function draftImageBytes(files){
   let bytes=0;
@@ -3857,6 +4126,12 @@ function draftImageBytes(files){
   return bytes
 }
 const isDraftImage=file=>['image/png','image/jpeg','image/webp'].includes(file.type);
+function previewableFile(file){
+  if(file.type.startsWith('image/'))return file;
+  const type=({png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',
+    svg:'image/svg+xml',avif:'image/avif',bmp:'image/bmp',ico:'image/x-icon'})[file.name.split('.').pop().toLowerCase()];
+  return type?new File([file],file.name,{type}):null
+}
 function imageDataUrl(file){
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
@@ -3872,14 +4147,17 @@ function storedImageFile(attachment){
   return new File([bytes],attachment.name,{type})
 }
 async function fitDraftImage(file,budget){
-  if(file.size<=budget)return file;
-  const bitmap=await createImageBitmap(file);
+  if(file.size<=budget&&isDraftImage(file))return file;
+  let bitmap,objectUrl;
   try{
-    const canvas=document.createElement('canvas');
-    const longest=Math.max(bitmap.width,bitmap.height),minScale=Math.min(1,320/longest);
+    try{bitmap=await createImageBitmap(file)}catch{
+      objectUrl=URL.createObjectURL(file);bitmap=new Image();bitmap.src=objectUrl;await bitmap.decode()
+    }
+    const canvas=document.createElement('canvas'),width=bitmap.naturalWidth||bitmap.width,height=bitmap.naturalHeight||bitmap.height;
+    const longest=Math.max(width,height),minScale=Math.min(1,320/longest);
     let scale=Math.min(1,2560/longest);
     while(true){
-      canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+      canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
       const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',.9));
       if(!blob)throw Error('设备无法转换这张图片');
@@ -3890,7 +4168,83 @@ async function fitDraftImage(file,budget){
       if(Math.max(canvas.width,canvas.height)<=320)throw Error('剩余空间不足，请移除部分图片');
       scale=Math.max(minScale,scale*Math.min(.8,Math.sqrt(budget/blob.size)*.95))
     }
-  }finally{bitmap.close()}
+  }finally{bitmap?.close?.();if(objectUrl)URL.revokeObjectURL(objectUrl)}
+}
+function refreshAttachmentTray(chat){
+  if(current()===chat)composer();
+  else if(visibleSideChat?.chat===chat)visibleSideChat.sync()
+}
+function progressFor(chat,file,offset){
+  const progress='正在上传 '+file.name+' · '+(file.size?Math.floor(offset/file.size*100):0)+'%';
+  if(uploadProgress.get(chat)!==progress){uploadProgress.set(chat,progress);refreshAttachmentTray(chat)}
+}
+async function uploadAttachment(chat,file,scope){
+  if(file.size>64*1024*1024)throw Error(file.name+' 超过 64 MiB 上传上限');
+  const params=new URLSearchParams({...scope,id:crypto.randomUUID(),name:file.name,total:String(file.size)});
+  let offset=0;
+  do{
+    progressFor(chat,file,offset);params.set('offset',String(offset));
+    const part=file.slice(offset,offset+128*1024);
+    let data;
+    for(let attempt=0;;attempt++){
+      let response;
+      try{
+        response=await deviceFetch('/api/attachments/upload?'+params,{method:'POST',headers:{'Content-Type':'application/octet-stream'},
+          body:part,signal:AbortSignal.timeout(60000)});
+        data=await response.json();
+        if(response.ok)break;
+        throw Error(data.error||'主机未接收附件')
+      }catch(error){
+        if(attempt>=2||(response&&response.status<500&&response.status!==429))throw error;
+        await sleep(500*(attempt+1))
+      }
+    }
+    if(data.complete){
+      if(data.size!==file.size||typeof data.path!=='string'||!data.path||typeof data.root!=='string'||!data.root)throw Error('主机附件回执无效');
+      return {name:file.name,size:file.size,uploadPath:data.path,uploadRoot:data.root}
+    }
+    if(!Number.isSafeInteger(data.offset)||data.offset<=offset||data.offset>=file.size)throw Error('主机附件进度无效');
+    offset=data.offset
+  }while(offset<file.size)
+}
+async function addLocalFiles(batch,chat=current()){
+  if(!batch.length||chat.archived)return;
+  const scope=chat.thread?{thread:chat.thread}:chat.cwd?{cwd:chat.cwd,...(chat.projectId?{projectId:chat.projectId}:{})}:null;
+  const prior=attachmentQueues.get(chat)||Promise.resolve();
+  readingFiles.set(chat,(readingFiles.get(chat)||0)+1);refreshAttachmentTray(chat);
+  const work=prior.catch(()=>{}).then(async()=>{
+    let supported=false;
+    try{
+      const res=await deviceFetch('/api/capabilities',{signal:AbortSignal.timeout(10000)});
+      supported=res.ok&&(await res.json()).attachmentUpload===true
+    }catch{/* Inline attachments also work in an offline draft. */}
+    if(!supported||!scope){
+      const inline=batch.every(file=>isDraftImage(file)||file.type.startsWith('text/')||
+        /\.(?:txt|md|csv|tsv|json|log|js|py|ts|html|css|xml|yaml|yml)$/i.test(file.name));
+      if(!inline)throw Error(supported?'请先选择主机项目，再上传文件':'当前主机连接未提供文件上传');
+      await addTextFiles(batch,true,chat);return
+    }
+    for(const file of batch){
+      const attachment=await uploadAttachment(chat,file,scope);
+      const preview=previewableFile(file);
+      if(preview){
+        const budget=maxImageBytes-draftImageBytes(chat.files);
+        if(budget>0){
+          try{attachment.url=await imageDataUrl(await fitDraftImage(preview,budget))}
+          catch{/* The original is still available through the host file preview. */}
+        }
+      }
+      chat.files=chat.files.concat(attachment);save();refreshAttachmentTray(chat)
+    }
+  });
+  attachmentQueues.set(chat,work);
+  try{await work}catch(error){toast(error.message||'附件上传失败')}
+  finally{
+    if(attachmentQueues.get(chat)===work)attachmentQueues.delete(chat);
+    uploadProgress.delete(chat);
+    const left=readingFiles.get(chat)-1;if(left)readingFiles.set(chat,left);else readingFiles.delete(chat);
+    refreshAttachmentTray(chat)
+  }
 }
 function offerImageCopies(chat,batch=null){
   const original=chat.files;
@@ -3955,8 +4309,8 @@ async function addTextFiles(batch,offerCopies=true,c=current()){
     else if(visibleSideChat?.chat===c)visibleSideChat.sync()
   }
 }
-function pasteComposerImages(event,chat){
-  const files=Array.from(event.clipboardData?.files||[]).filter(file=>['image/png','image/jpeg','image/webp'].includes(file.type));
+function pasteComposerFiles(event,chat){
+  const files=Array.from(event.clipboardData?.files||[]);
   if(!files.length)return;
   event.preventDefault();
   const input=event.currentTarget,text=event.clipboardData.getData('text/plain');
@@ -3965,9 +4319,9 @@ function pasteComposerImages(event,chat){
     input.setRangeText(text,input.selectionStart,input.selectionEnd,'end');
     input.dispatchEvent(new Event('input',{bubbles:true}))
   }
-  void addTextFiles(files,true,chat)
+  void addLocalFiles(files,chat)
 }
-$('prompt').addEventListener('paste',event=>pasteComposerImages(event,current()));
+$('prompt').addEventListener('paste',event=>pasteComposerFiles(event,current()));
 const promptBox=$('prompt');
 function fitEditorViewport(){
   const layout=$('layout'),height=window.visualViewport?.height||window.innerHeight;
@@ -3998,16 +4352,35 @@ function mentionContext(){
   const root=projectRootFor(c.cwd,roots);
   return root?{chat:c.id,root,query:match[1],start:end-match[1].length-1,end}:null
 }
-function modelCommandRange(){
+function composerCommands(query){
+  const chat=current();
+  if(savingGoals.has(chat))return [];
+  const commands=[{name:'model',label:'选择模型'}];
+  if(chat.thread)commands.push({name:'side',label:'新建侧边聊天'});
+  if(!chat.pending&&!chat.activeTurn){
+    commands.push({name:'goal',label:'设置要持续追求的目标'});
+    if(!nativePermissionMode||chat.collaborationMode==='plan'){
+      commands.push({name:'plan',label:'计划模式'})
+    }
+  }
+  return commands.filter(command=>('/'+command.name).startsWith(query))
+}
+function composerCommandRange(){
   const end=promptBox.selectionEnd,value=promptBox.value;
   if(document.activeElement!==promptBox||composingPrompt||current().archived||
     promptBox.selectionStart!==end||(end<value.length&&!/\s/u.test(value[end])))return null;
   const match=/(?:^|\s)(\/[a-z]*)$/i.exec(value.slice(0,end));
-  return match&&'/model'.startsWith(match[1].toLowerCase())?{start:end-match[1].length,end}:null
+  return match?{start:end-match[1].length,end,query:match[1].toLowerCase()}:null
 }
-function openCommandModels(range){
+function openComposerCommand(name,range){
   closeMentions();promptBox.setRangeText('',range.start,range.end,'start');
   promptBox.dispatchEvent(new Event('input',{bubbles:true}));
+  if(name==='goal'){void enableGoalComposer();return}
+  if(name==='side'){openRecord(sideChatTab);return}
+  if(name==='plan'){
+    if(current().collaborationMode!=='plan')void togglePlanMode();
+    return
+  }
   const chat=current(),draft=promptBox.value;
   const restoreCaret=()=>{
     if(current()===chat&&promptBox.value===draft&&!$('dialog').open&&$('dialog').returnValue!=='outside-click'){
@@ -4019,9 +4392,9 @@ function openCommandModels(range){
 }
 function chooseMention(index){
   if(mention?.command){
-    const range=modelCommandRange();
-    if(mention.chat!==current().id||!range){closeMentions();return}
-    openCommandModels(range);return
+    const range=composerCommandRange(),command=mention.commands[index];
+    if(mention.chat!==current().id||!range||range.query!==mention.query||!command){closeMentions();return}
+    openComposerCommand(command.name,range);return
   }
   const context=mentionContext(),item=mention?.files[index];
   if(!item||!context||context.chat!==mention.chat||context.root!==mention.root||context.start!==mention.start||context.query!==mention.query){closeMentions();return}
@@ -4065,15 +4438,20 @@ async function readMentions(request){
   finally{mentionReading=false;const next=queuedMention;queuedMention=null;if(next&&next===mention)void readMentions(next)}
 }
 function updateMentions(){
-  if(modelCommandRange()){
-    closeMentions();mention={command:true,chat:current().id,files:[],index:0};
+  const range=composerCommandRange(),commands=range?composerCommands(range.query):[];
+  if(commands.length){
+    closeMentions();mention={command:true,chat:current().id,query:range.query,commands,files:[],index:0};
     document.body.append(mentionBox);mentionBox.classList.add('command-suggestions');
     mentionBox.hidden=false;positionCommandMenu(mentionBox);mentionList.setAttribute('aria-label','命令');
     promptBox.setAttribute('aria-controls','mention-list');promptBox.setAttribute('aria-autocomplete','list');
     $('mention-status').textContent='';
-    const button=element('button','mention-option','/model　选择模型');button.type='button';button.tabIndex=-1;
-    button.id='model-command-option';button.setAttribute('role','option');button.onmousedown=e=>e.preventDefault();
-    button.onclick=()=>chooseMention(0);mentionList.append(button);highlightMention(0);return
+    for(const [i,command] of commands.entries()){
+      const button=element('button','mention-option','/'+command.name+'　'+command.label);
+      button.type='button';button.tabIndex=-1;button.id=command.name+'-command-option';
+      button.setAttribute('role','option');button.onmousedown=e=>e.preventDefault();
+      button.onclick=()=>chooseMention(i);mentionList.append(button)
+    }
+    highlightMention(0);return
   }
   mentionList.setAttribute('aria-label','主机项目文件');
   const ctx=mentionContext();if(!ctx){closeMentions();return}
@@ -4104,9 +4482,11 @@ function acceptSuggestion(event){
 promptBox.onkeydown=e=>{
   if(mention&&!e.isComposing&&!composingPrompt&&e.keyCode!==229){
     if(e.key==='Escape'){e.preventDefault();closeMentions();return}
-    if(['ArrowDown','ArrowUp'].includes(e.key)&&mention.files.length){
-      e.preventDefault();highlightMention((mention.index+(e.key==='ArrowDown'?1:-1)+mention.files.length)%mention.files.length);return
+    const count=mention.command?mention.commands.length:mention.files.length;
+    if(['ArrowDown','ArrowUp'].includes(e.key)&&count){
+      e.preventDefault();highlightMention((mention.index+(e.key==='ArrowDown'?1:-1)+count)%count);return
     }
+    if(mention.command&&e.key==='Tab'&&!e.shiftKey&&!e.altKey&&!e.ctrlKey&&!e.metaKey&&acceptSuggestion(e))return;
     if(e.key==='Enter'&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!promptBox.hasAttribute('data-android-ime')&&acceptSuggestion(e))return;
     if(['ArrowLeft','ArrowRight','Home','End','Tab'].includes(e.key))closeMentions()
   }
@@ -4392,7 +4772,7 @@ async function poll(c,firstAttempt=false){
 }
 async function steer(c,externalSideTurn=null){
   const draft=c.draft.trim(),files=c.files||[],id=c.pending||c.thread,turn=c.pending?c.turn:(externalSideTurn||c.activeTurn);
-  if(!turn||!id||c.steering||readingFiles.has(c)||(!draft&&!files.length))return;
+  if(!turn||!id||c.stopping===turn||c.steering||readingFiles.has(c)||(!draft&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const images=files.filter(f=>f.url).map(f=>f.url);
   const text=promptWithFiles(draft,files);
@@ -4417,8 +4797,16 @@ async function steer(c,externalSideTurn=null){
     else if(visibleSideChat?.chat===c)visibleSideChat.sync()
   }
 }
-$('steer').onclick=()=>$('composer').requestSubmit();
-$('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}
+$('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;const command=composerCommands(text.toLowerCase()).find(item=>'/'+item.name===text.toLowerCase());
+  if(command&&['model','plan'].includes(command.name)){openComposerCommand(command.name,{start:0,end:submittedDraft.length});return}
+  if(savingGoals.has(c))return;
+  if(/^\/goal(?:\s|$)/i.test(text)){
+    if(!enableGoalComposer())return;
+    c.draft=text.slice(5).trimStart();save();composer();
+    if(c.draft.trim())submitGoal(c,c.draft.trim());
+    return
+  }
+  if(c.goalMode){submitGoal(c,text);return}
   if(/^\/side(?:\s|$)/.test(text)){
     if(!c.thread){toast('当前聊天开始后才能使用 /side');return}
     if(readingFiles.has(c))return;
@@ -4439,7 +4827,7 @@ $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedD
   const foreground=document.hidden?null:{started:performance.now(),selection:selectionRevision,foreground:foregroundRevision};
   let native;
   try{native=await nativePermissions()}catch(error){toast(error.message);return}
-  if(current()!==c||c.pending||c.activeTurn||c.archived||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
+  if(current()!==c||c.pending||c.activeTurn||c.archived||c.goalMode||savingGoals.has(c)||c.draft!==submittedDraft||c.files!==files||readingFiles.has(c))return;
   const unsupportedSpeed=native&&turnModelOptions(c).serviceTier&&projectCatalog(c.cwd||'')?.canSetServiceTier!==true;
   if(native&&(c.collaborationMode==='plan'||unsupportedSpeed)){
     const body=modal('调整聊天设置');
@@ -4454,7 +4842,7 @@ $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedD
     void permissionView(true);return
   }
   document.dispatchEvent(new CustomEvent('draft-submitted',{detail:c.id}));
-  const id=crypto.randomUUID();delete c.receiptUnknown;delete c.selectionDuringTurn;c.pending=id;c.turn=null;c.stopping=false;c.preview='';c.items=[];c.phase='正在发送…';c.error=null;const visible=[text,...files.map(f=>'📎 '+f.name)].filter(Boolean).join('\n');if(!c.messages.length)c.title=(text||files[0].name).slice(0,45);const images=files.filter(f=>f.url).map(f=>f.url);c.outbox={id,draft:submittedDraft,files,options:{approvalPolicy:c.approvalPolicy||"never",expectedThread:c.thread||null,parent:c.parent,cwd:c.cwd||null,projectId:c.projectId||null,sandbox:c.sandbox||'read-only',collaborationMode:c.collaborationMode||null,...turnModelOptions(c)}};const optimistic={role:'user',text:visible,images,submissionId:id};c.messages.push(optimistic);c.files=[];c.draft='';c.updated=Date.now();save();renderSidebarHistory();composer();messages();
+  const id=crypto.randomUUID();delete c.receiptUnknown;delete c.selectionDuringTurn;c.pending=id;c.turn=null;c.stopping=false;c.preview='';c.items=[];c.phase='正在发送…';c.error=null;const visible=submittedMessageText(text,files);if(!c.messages.length)c.title=(text||files[0].name).slice(0,45);const images=files.filter(f=>f.url).map(f=>f.url);c.outbox={id,draft:submittedDraft,files,options:{approvalPolicy:c.approvalPolicy||"never",expectedThread:c.thread||null,parent:c.parent,cwd:c.cwd||null,projectId:c.projectId||null,sandbox:c.sandbox||'read-only',collaborationMode:c.collaborationMode||null,...turnModelOptions(c)}};const optimistic={role:'user',text:visible,images,submissionId:id};c.messages.push(optimistic);c.files=[];c.draft='';c.updated=Date.now();save();renderSidebarHistory();composer();messages();
   if(foreground)foregroundSubmissions.set(c,{id,...foreground});
   await poll(c,true)
 };
@@ -4808,7 +5196,7 @@ async function remotePicker(projects){
 }
 
 $('send').addEventListener('click',async e=>{
-  const c=current(),turn=c.pending?c.turn:c.activeTurn;if(!turn||c.stopping===turn)return;
+  const c=current(),turn=c.pending?c.turn:c.activeTurn;if(!turn||c.stopping===turn||c.draft.trim()||c.files.length)return;
   e.preventDefault();const path=c.pending?'/api/interrupt/'+c.pending:'/api/thread-interrupt/'+c.thread+'/'+turn;
   c.stopping=turn;resize();
   try{const res=await deviceFetch(path,{method:'POST'});const data=await res.json();
@@ -4927,8 +5315,10 @@ function fetchModelCatalog(cwd=''){
 }
 function tierIcon(id){return id==='ultrafast'?'speed-ultrafast':id==='priority'?'speed-fast':'speed'}
 function displayedSpeed(c,model){
-  const id=c.speedChoice?.model===model?.id?c.speedChoice?.id:
-    c.thread?c.threadServiceTier:db.projectModelDefaults?.[c.cwd||'']?.defaults?.serviceTier;
+  if(!model)return;
+  const selected=c.speedChoice?.model===model.id?c.speedChoice.id:null;
+  const project=db.projectModelDefaults?.[c.cwd||'']?.defaults?.serviceTier;
+  const id=selected??(c.thread?c.threadServiceTier:null)??project??model.defaultServiceTier;
   return model?.serviceTiers?.find(tier=>tier.id===id)
 }
 function modelLabel(c,trigger=$('model-picker')){
@@ -5010,9 +5400,12 @@ function positionSpeedMenu(menu){
   const height=Math.max(0,(view?.height??innerHeight)-16);
   menu.style.maxWidth=width+'px';menu.style.maxHeight=height+'px';
   const anchor=trigger.getBoundingClientRect(),box=menu.getBoundingClientRect();
-  const side=anchor.left-left>=box.width+4?anchor.left-box.width-4:anchor.right+4;
+  const parent=$('dialog').getBoundingClientRect();
+  const rightRoom=left+width-parent.right,leftRoom=parent.left-left;
+  const side=rightRoom>=box.width+4||rightRoom>=leftRoom?parent.right+4:parent.left-box.width-4;
   menu.style.left=Math.max(left,Math.min(side,left+width-box.width))+'px';
-  menu.style.top=Math.max(top,Math.min(anchor.top,top+height-box.height))+'px'
+  const inset=parseFloat(getComputedStyle(menu).paddingTop)||0;
+  menu.style.top=Math.max(top,Math.min(anchor.top-inset,top+height-box.height))+'px'
 }
 const modelAnchorSupported=CSS.supports('position-area','top span-left');
 function repositionModelMenus(){
@@ -5318,13 +5711,15 @@ async function modelPicker(force=false,openList=false,c=current(),trigger=$('mod
 }
 
 function supportsNativePermission(c){
-  return c.sandbox==='remote-workspace'||c.sandbox==='danger-full-access'&&c.approvalPolicy!=='untrusted'
+  return ['remote-workspace','auto-review'].includes(c.sandbox)||c.sandbox==='danger-full-access'&&c.approvalPolicy!=='untrusted'
 }
 function updatePermissionLabel(c){
   const next=nativePermissionMode&&!supportsNativePermission(c)?'选择任务权限':WorkbenchComponents.permissionLabel(c.sandbox);
   const running=!!(c.pending||c.activeTurn),label=$('sandbox-label');
   const visible=running?'下轮 · '+next:next;
   label.classList.toggle('full-access',c.sandbox==='danger-full-access');
+  const triggerIcon=label.parentElement.querySelector('use');
+  triggerIcon?.setAttribute('href','/icons.svg#'+WorkbenchComponents.permissionIcon(c.sandbox));
   if(label.textContent!==visible)label.textContent=visible;
   const hint='下一轮权限 · '+next;
   if(label.parentElement.title!==hint)label.parentElement.title=hint;
@@ -5344,14 +5739,14 @@ async function permissionView(beforeSend=false){
     $('dialog').classList.add('composer-menu');positionComposerPopup()
   }
   const activeReport=element('p','quiet');activeReport.id='active-turn-policy';activeReport.setAttribute('role','status');
-  body.append(activeReport,element('div','preference-label','下一轮权限'));updatePermissionLabel(c);
+  body.append(activeReport,element('div','preference-label','应如何批准 Codex 操作？'));updatePermissionLabel(c);
   const selected=c.sandbox||'read-only';
   const loading=element('p','quiet','正在读取主机权限…');body.append(loading);
   const openingFocus=document.activeElement;
   function focusPermission(){
     enableMenuNavigation(body);
     if(document.activeElement===openingFocus){
-      const choice=body.querySelector('[aria-pressed=true]')||body.querySelector('button');
+      const choice=body.querySelector('[aria-pressed=true]:not(:disabled)')||body.querySelector('button:not(:disabled)');
       choice?.focus({preventScroll:true})
     }
   }
@@ -5360,10 +5755,15 @@ async function permissionView(beforeSend=false){
     if(body.contains(loading))loading.textContent=error.message;
     return
   }
+  let autoReview=false;
+  try{
+    const response=await deviceFetch('/api/capabilities');
+    autoReview=response.ok&&(await response.json()).autoReview===true;
+  }catch{}
   if(!body.contains(loading)||!$('dialog').open||current()!==c)return;
   loading.remove();
   const ask=c.approvalPolicy==='untrusted';
-  WorkbenchComponents.renderPermissionChoices(body,{native,selected,ask,beforeSend,
+  WorkbenchComponents.renderPermissionChoices(body,{native,selected,ask,beforeSend,autoReview,
     async select(mode){
       if(!native&&mode==='danger-full-access'){
         try{
@@ -5372,12 +5772,21 @@ async function permissionView(beforeSend=false){
         }catch(e){if(body.contains(activeReport)&&$('dialog').open)toast(e.message);return}
         if(current()!==c||!$('dialog').open||!body.contains(activeReport))return;
       }
-      if(native)c.approvalPolicy='never';
-      c.sandbox=mode;save();closeDialog();composer()
+      function apply(){
+        if(current()!==c)return;
+        if(native||['ask-for-approval','auto-review','danger-full-access'].includes(mode))c.approvalPolicy='never';
+        c.sandbox=mode;save();closeDialog();composer();
+      }
+      if(mode==='danger-full-access'&&(selected!==mode||ask)){
+        const confirm=modal('要开启完整访问权限吗？');
+        confirm.append(element('p','quiet','Codex 将能够在主机上执行命令、访问网络，以及读取、修改或删除工作区以外的文件。'),
+          row('取消','x',()=>permissionView(beforeSend)),row('确认','permission-full',apply));
+        confirm.querySelector('button')?.focus();
+      }else apply();
     }
   });
   if(native){focusPermission();return}
-  body.append(row('命令与文件审批','shield',async()=>{
+  if(['read-only','workspace-write','danger-full-access'].includes(selected))body.append(row('命令与文件审批','shield',async()=>{
     try{
       const r=await deviceFetch('/api/capabilities');
       if(!r.ok||!(await r.json()).commandApproval)throw Error('当前接收端版本不支持命令审批');
@@ -5385,7 +5794,6 @@ async function permissionView(beforeSend=false){
       c.approvalPolicy=ask?'never':'untrusted';save();permissionView()
     }catch(e){toast(e.message)}
   },ask?'询问':'关闭'));
-  body.append(element('p','quiet','设置从下一轮生效。启用审批后，主机会对需要确认的命令或文件修改发出请求。'));
   if(c.permissions?.requested){
     const policy=c.permissions.requested;
     if(!(c.pending||c.activeTurn)||c.permissions.turn!==(c.pending?c.turn:c.activeTurn))
@@ -5395,38 +5803,53 @@ async function permissionView(beforeSend=false){
   }
   focusPermission()
 }
-function contextRemaining(usage){
-  if(!Number.isFinite(usage?.total)||usage.total<0||!Number.isFinite(usage.contextWindow)||usage.contextWindow<=0)return null;
-  return 100-100*(Math.min(usage.total,usage.contextWindow)/usage.contextWindow)
+const usageButton=$('usage-button'),usageTooltip=$('context-usage-detail');
+let contextUsagePinned=false;
+function renderContextUsage(usage){
+  usageButton.hidden=db.showContextWindowUsage!==true||!Number.isFinite(usage?.total)||usage.total<0||
+    !Number.isFinite(usage.contextWindow)||usage.contextWindow<=0;
+  if(usageButton.hidden){hideContextUsage();return}
+  const used=Math.min(usage.total,usage.contextWindow),percent=used/usage.contextWindow*100,rounded=Math.round(percent);
+  const arc=$('context-usage-arc');
+  arc.setAttribute('stroke-dashoffset',String(100-percent));arc.setAttribute('opacity',percent===0?'0':'1');
+  usageButton.setAttribute('aria-label','上下文用量：'+rounded+'%');
+  $('context-usage-percent').textContent=rounded+'% 已用'+(rounded<50?'（剩余 '+(100-rounded)+'%）':'');
+  $('context-usage-percent').classList.toggle('muted',rounded>=50);
+  const thousands=value=>Math.round(value/1000).toLocaleString('zh-CN');
+  $('context-usage-tokens').textContent='已用 '+thousands(used)+'k 标记，共 '+thousands(usage.contextWindow)+'k';
+  if(!usageTooltip.hidden)positionContextUsage()
 }
-function renderContextUsage(u){
-  const button=$('usage-button'),remaining=contextRemaining(u);
-  button.hidden=!u;
-  button.toggleAttribute('data-measured',remaining!==null);
-  button.style.setProperty('--context-used',(remaining===null?0:100-remaining)+'%');
-  const summary=remaining===null?'查看上下文用量':'上下文剩余 '+Math.round(remaining)+'%';
-  const value=button.querySelector('small');
-  value.textContent=remaining===null?'':Math.round(remaining)+'%';
-  button.title=summary;button.setAttribute('aria-description',summary);
-  const detail=$('context-usage-detail');
-  if(!detail||!$('dialog').open)return;
-  const rows=[];
-  if(remaining!==null){
-    const used=Math.min(u.total,u.contextWindow).toLocaleString('zh-CN');
-    rows.push(summary+'（已用 '+used+' / '+u.contextWindow.toLocaleString('zh-CN')+' tokens）')
-  }
-  for(const [label,value] of [['最近一次输入',u?.input],['最近一次输出',u?.output],['模型上下文上限',u?.contextWindow]]){
-    if(Number.isFinite(value))rows.push(label+'：'+value.toLocaleString('zh-CN')+' tokens')
-  }
-  if(!rows.length)rows.push('主机尚未返回上下文用量');
-  if(detail.textContent!==rows.join(''))detail.replaceChildren(...rows.map(text=>element('p','',text)))
+function positionContextUsage(){
+  if(usageTooltip.hidden)return;
+  const anchor=usageButton.getBoundingClientRect();
+  const left=anchor.left+(anchor.width-usageTooltip.offsetWidth)/2;
+  usageTooltip.style.left=Math.max(4,Math.min(left,innerWidth-usageTooltip.offsetWidth-4))+'px';
+  usageTooltip.style.top=Math.max(4,anchor.top-usageTooltip.offsetHeight-4)+'px'
+}
+function showContextUsage(){
+  if(usageButton.hidden)return;
+  usageTooltip.hidden=false;usageButton.setAttribute('aria-describedby',usageTooltip.id);positionContextUsage()
+}
+function hideContextUsage(){
+  contextUsagePinned=false;usageTooltip.hidden=true;usageButton.removeAttribute('aria-describedby')
 }
 function usageView(){
-  const u=current().usage;if(!u)return;
-  const detail=element('div');detail.id='context-usage-detail';modal('上下文用量',$('usage-button')).append(detail);
-  $('dialog').classList.add('composer-menu');positionComposerPopup();
-  renderContextUsage(u)
+  if(contextUsagePinned){hideContextUsage();return}
+  contextUsagePinned=true;showContextUsage()
 }
+usageButton.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse')showContextUsage()});
+usageButton.addEventListener('pointerleave',event=>{if(event.pointerType==='mouse'&&!contextUsagePinned)hideContextUsage()});
+usageButton.addEventListener('focus',showContextUsage);
+usageButton.addEventListener('blur',hideContextUsage);
+document.addEventListener('pointerdown',event=>{
+  if(!usageTooltip.hidden&&!usageButton.contains(event.target))hideContextUsage()
+},true);
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&!usageTooltip.hidden){hideContextUsage();event.preventDefault();event.stopImmediatePropagation()}
+},true);
+window.addEventListener('resize',positionContextUsage);
+window.visualViewport?.addEventListener('resize',positionContextUsage);
+new ResizeObserver(positionContextUsage).observe($('composer'));
 
 function renameChat(c){
   const body=modal('重命名聊天'),field=element('input','field'),status=element('p','quiet');
