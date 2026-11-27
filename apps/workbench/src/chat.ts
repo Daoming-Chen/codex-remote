@@ -1114,7 +1114,8 @@ function mountSideChat(container,owner,chat){
       const streaming=role==='assistant'&&!stored.has(row);
       if(entry.text!==text||entry.images!==images||entry.streaming!==streaming){
         if(role==='user'){
-          entry.message.textContent=text||'';
+          entry.message.replaceChildren();
+          if(text)entry.message.append(userMessageText(text));
           for(const url of images||[])entry.message.append(attachmentImage(url))
         }else{
           entry.message.dataset.turn=row.turn||'';
@@ -1991,13 +1992,15 @@ const messageWrap=new WeakMap();
 const userTextObserver=new ResizeObserver(entries=>{
   for(const {target,contentRect} of entries){
     const container=target.parentElement?.parentElement;
-    if(!target.isConnected||!contentRect.width)continue;
+    if(!target.isConnected){userTextObserver.unobserve(target);continue}
+    if(!contentRect.width)continue;
     const line=parseFloat(getComputedStyle(target).lineHeight);
     const long=contentRect.height>20*line+1||target.textContent.length>10240;
     let toggle=container.querySelector('.user-text-toggle');
     if(!long){
       toggle?.remove();container.classList.remove('truncated');continue
     }
+    container.style.setProperty('--collapsed-user-height',19*line+'px');
     if(toggle)continue;
     toggle=element('button','user-text-toggle');toggle.type='button';
     target.id='user-text-'+crypto.randomUUID();toggle.setAttribute('aria-controls',target.id);
@@ -2010,6 +2013,11 @@ const userTextObserver=new ResizeObserver(entries=>{
     update(false);container.append(toggle)
   }
 });
+function userMessageText(value){
+  const body=element('div','user-text'),viewport=element('div','user-text-viewport'),text=element('div','',value);
+  viewport.append(text);body.append(viewport);userTextObserver.observe(text);
+  return body
+}
 function voiceHandoffTranscript(text){
   if(!text?.startsWith('<realtime_delegation>')||!text.trimEnd().endsWith('</realtime_delegation>'))return null;
   const xml=new DOMParser().parseFromString(text,'application/xml'),root=xml.documentElement;
@@ -2022,9 +2030,8 @@ function userBubble(m){
   const group=element('div','user-turn'),bubble=element('div','msg user-msg');
   if(m.text){
     const transcript=voiceHandoffTranscript(m.text);
-    const body=element('div','user-text'),viewport=element('div','user-text-viewport'),text=element('div','',transcript||m.text);
     if(transcript)bubble.append(element('strong','voice-transcript-label','语音对话记录'));
-    viewport.append(text);body.append(viewport);bubble.append(body);userTextObserver.observe(text);
+    bubble.append(userMessageText(transcript||m.text));
     if(transcript){
       const original=element('details','voice-original');
       original.append(element('summary','','查看原始记录'),element('pre','',m.text));bubble.append(original)

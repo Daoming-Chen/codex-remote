@@ -82,6 +82,7 @@ test('sending from older side chat history reveals the submitted question',async
     const parent='00000000-0000-4000-8000-000000000030',thread='00000000-0000-4000-8000-000000000031';
     await page.addInitScript(({parent,thread,scope})=>{
       const messages=Array.from({length:50},(_,i)=>({role:'assistant',text:'历史回复 '+i}));
+      messages.unshift({role:'user',text:Array.from({length:30},(_,i)=>'问题第 '+i+' 行').join('\n')});
       const side={id:thread,thread,messages,draft:'',files:[]};
       const tab='receiver:side-chat';
       const owner={id:parent,thread:parent,messages:[],sideChats:[side],workView:{ids:[tab],active:tab}};
@@ -98,6 +99,15 @@ test('sending from older side chat history reveals the submitted question',async
     await page.goto(origin+base+'/');
     const history=page.locator('.side-chat-history');
     await history.getByText('历史回复 49',{exact:true}).waitFor();
+    const longQuestion=history.locator('.side-question').first();
+    const viewport=longQuestion.locator('.user-text-viewport');
+    const more=longQuestion.getByRole('button',{name:'显示更多'});
+    await more.waitFor();
+    assert(await viewport.evaluate(el=>el.clientHeight<el.scrollHeight));
+    await more.click();
+    assert(await viewport.evaluate(el=>el.clientHeight===el.scrollHeight));
+    await longQuestion.getByRole('button',{name:'收起'}).click();
+    assert(await viewport.evaluate(el=>el.clientHeight<el.scrollHeight));
     await page.locator('.side-chat textarea').fill('从历史位置发送');
     assert(await history.evaluate(el=>{el.scrollTop=0;return el.scrollHeight-el.clientHeight>500}));
     await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).click();

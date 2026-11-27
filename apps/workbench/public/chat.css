@@ -586,7 +586,7 @@ dialog.model-menu.model-command-menu {
   #jump-latest, .jump-face { transition: none; }
 }
 @media print { #jump-latest { display: none; } }
-.user-text.truncated .user-text-viewport { overflow: hidden; max-height: 19lh; }
+.user-text.truncated .user-text-viewport { overflow: hidden; max-height: var(--collapsed-user-height); }
 .user-text.truncated .user-text-toggle::before { content: '…'; display: block; margin-bottom: 4px; }
 .user-text-toggle {
   display: block; padding: 0; margin-top: 6px; background: transparent;
