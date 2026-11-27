@@ -490,7 +490,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
       }
       if(path===base+'/api/project-file-snapshot'){
         readPath=route.request().postDataJSON().path;
-        return route.fulfill({json:{source:'working-tree',text:'项目文件内容'}});
+        return route.fulfill({json:{source:'working-tree',text:'项目文件内容\n'.repeat(180)}});
       }
       if(path===base+'/api/web-preview/ports')return route.fulfill({json:{ports:[5173]}});
       if(path===base+'/api/thread-fork'){
@@ -536,6 +536,12 @@ test('show tabs opens one combobox for project files and approved host web apps 
     await page.getByRole('option',{name:'src/note.txt'}).tap();
     await page.locator('.project-explorer-reader pre').waitFor();
     assert.equal(readPath,root+'\\src\\note.txt');
+    const fileText=page.locator('.project-explorer-reader pre');
+    const scroll=await fileText.evaluate(el=>{el.scrollTop=700;return el.scrollTop});
+    assert(scroll>0);
+    await page.keyboard.press('Control+Alt+s');
+    await page.getByRole('button',{name:'关闭 侧边聊天',exact:true}).tap();
+    assert.equal(await fileText.evaluate(el=>el.scrollTop),scroll);
     await page.getByRole('button',{name:'关闭 文件资源管理器',exact:true}).tap();
     await box.fill('localhost:5174');
     await page.getByRole('option',{name:'http://localhost:5174/'}).tap();

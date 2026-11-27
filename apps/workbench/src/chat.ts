@@ -1254,13 +1254,13 @@ function renderWorkbench(){
   const home=!chat.messages.length&&!chat.thread;
   const emptyPanel=!!chat.emptyPanelOpen&&!summary&&!view?.ids.length;
   const hidden=!!(chat.workHidden&&(summary||view?.ids.length));
-  let browser=pane.querySelector(':scope > .host-browser');
-  if(browser&&(browser.dataset.owner!==chat.id||!view?.ids.includes(browserTab.id))){
-    browser.remove();browser=null
+  const projectContext=JSON.stringify([chat.projectId,chat.cwd]);
+  for(const panel of pane.querySelectorAll(':scope > [data-panel-tab]')){
+    if(panel.dataset.owner!==chat.id||!view?.ids.includes(panel.dataset.panelTab)||
+       (panel.dataset.panelTab===projectFilesTab.id&&panel.dataset.project!==projectContext))panel.remove();
+    else panel.hidden=summary||hidden||view.active!==panel.dataset.panelTab
   }
-  const showingBrowser=!summary&&!hidden&&view?.active===browserTab.id;
-  if(browser)browser.hidden=!showingBrowser;
-  detail.hidden=showingBrowser;
+  detail.hidden=false;
   $('header-options').hidden=home;
   WorkbenchComponents.renderPanelToggle($('home-panel-toggle'),home,emptyPanel||!hidden&&!summary&&!!view?.ids.length,toggleWorkPanel);
   const empty=$('empty-work-panel'),searchKey=JSON.stringify([chat.id,chat.cwd,chat.thread]);
@@ -1351,22 +1351,24 @@ function renderWorkbench(){
   tabs.querySelector('.work-tab[aria-pressed="true"]')?.parentElement.scrollIntoView({block:'nearest',inline:'nearest'});
   }
   const record=openRecords.find(x=>x.id===activeRecord);
-  if(record===browserTab){
+  if(record===browserTab||record===projectFilesTab){
     detail.hidden=true;
-    if(!browser){
-      browser=element('section','panel-tool host-browser');browser.dataset.owner=chat.id;
-      pane.append(browser);mountHostBrowser(browser,chat)
+    let panel=pane.querySelector(':scope > [data-panel-tab="'+record.id+'"]');
+    if(!panel){
+      panel=element('section',record===browserTab?'panel-tool host-browser':'panel-tool project-files-panel');
+      panel.dataset.owner=chat.id;panel.dataset.panelTab=record.id;panel.dataset.project=projectContext;
+      pane.append(panel);
+      if(record===browserTab)mountHostBrowser(panel,chat);else mountProjectFiles(panel,chat)
     }
-    browser.hidden=false;return
+    panel.hidden=false;return
   }
-  if(panelTools.has(record.id)||record.type==='sideChat'){
+  if(record.type==='sideChat'){
     const identity=JSON.stringify([chat.id,chat.projectId,chat.cwd,record.id]);
     if(detail.firstElementChild?.dataset.toolIdentity!==identity){
       rememberWorkScroll(detail);previousDetail=null;
       const container=element('section','panel-tool');container.dataset.toolIdentity=identity;
       detail.replaceChildren(container);
-      if(record===projectFilesTab)mountProjectFiles(container,chat);
-      else if(record.type==='sideChat')mountSideChat(container,chat,sideChats.find((side,index)=>sideRecord(side,index).id===record.id));
+      mountSideChat(container,chat,sideChats.find((side,index)=>sideRecord(side,index).id===record.id));
     }
     return
   }
@@ -1603,7 +1605,7 @@ $('messages').addEventListener('click',event=>{
   const cwdPrefix=chat.cwd&&resolveChatFile(chat.cwd,chat.cwd).replace(/\/+$/,'')+'/';
   if(cwdPrefix&&pathKey(path).startsWith(pathKey(cwdPrefix))&&path.length>cwdPrefix.length){
     chat.projectFile={cwd:chat.cwd,path:path.slice(cwdPrefix.length),line:Number(line)||null};
-    $('work-detail').querySelector('.project-explorer')?.parentElement.remove();
+    $('workbench').querySelector(':scope > .project-files-panel')?.remove();
     openRecord(projectFilesTab);return
   }
   const body=modal('主机文件');
