@@ -1042,7 +1042,12 @@ function mountSideChat(container,owner,chat){
   modelTrigger.querySelector('#model-label').removeAttribute('id');
   modelTrigger.classList.add('side-model-picker');modelTrigger.setAttribute('aria-expanded','false');
   modelTrigger.onclick=()=>modelPicker(false,false,chat,modelTrigger);
-  actions.append(attach,modelTrigger,send);
+  const supplement=element('button','mode','补充要求');supplement.type='button';
+  supplement.onclick=async()=>{
+    const shared=!chat.pending;
+    if(await steer(chat,shared?externalTurn:null)&&shared)void refreshHistory()
+  };
+  actions.append(attach,modelTrigger,supplement,send);
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   const entries=[];
@@ -1135,6 +1140,8 @@ function mountSideChat(container,owner,chat){
     }
     status.textContent=chat.error||(openingSideThreads.has(chat)?'正在关联主聊天…':chat.pending?chat.phase:'');
     const turn=chat.pending?chat.turn:externalTurn,running=!!(chat.pending||turn);
+    supplement.hidden=!(turn&&(field.value.trim()||chat.files?.length));
+    supplement.disabled=!!chat.steering||readingFiles.has(chat)||chat.stopping===turn;
     send.setAttribute('aria-label',running?'停止':'发送');send.title=send.getAttribute('aria-label');
     send.replaceChildren(running?element('span','side-chat-stop'):icon('arrow-up'));
     send.disabled=running?!turn||chat.stopping===turn:(!field.value.trim()&&!chat.files?.length)||openingSideThreads.has(chat)||readingFiles.has(chat)
@@ -4340,8 +4347,8 @@ async function poll(c,firstAttempt=false){
     }
   }}finally{if(observedChats.get(c)===id)observedChats.delete(c);if(visibleSideChat?.chat===c)visibleSideChat.sync()}
 }
-async function steer(c){
-  const draft=c.draft.trim(),files=c.files,id=c.pending||c.thread,turn=c.pending?c.turn:c.activeTurn;
+async function steer(c,externalSideTurn=null){
+  const draft=c.draft.trim(),files=c.files||[],id=c.pending||c.thread,turn=c.pending?c.turn:(externalSideTurn||c.activeTurn);
   if(!turn||!id||c.steering||readingFiles.has(c)||(!draft&&!files.length))return;
   if(draftImageBytes(files)>maxImageBytes){offerImageCopies(c);return}
   const images=files.filter(f=>f.url).map(f=>f.url);
@@ -4350,17 +4357,22 @@ async function steer(c){
   if(c.steerRequest?.text!==text||c.steerRequest?.turn!==turn||JSON.stringify(c.steerRequest?.images||[])!==JSON.stringify(images))c.steerRequest={text,turn,images,request:crypto.randomUUID()};
   const payload=c.steerRequest,controller=new AbortController();
   pendingSteerReceipts.set(c,{turn,request:payload.request,controller});
-  save();c.steering=true;resize();
+  save();c.steering=true;
+  if(visibleSideChat?.chat===c)visibleSideChat.sync();else if(current()===c)resize();
   document.dispatchEvent(new CustomEvent('draft-submitted',{detail:c.id}));
   try{
     try{
       const r=await deviceFetch((c.pending?'/api/steer/':'/api/thread-steer/')+id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
       const data=await r.json();if(!r.ok||data.turn!==turn)throw Error(data.error||'主机未确认补充要求')
     }catch(error){if(!controller.signal.aborted)throw error}
-    addSupplement(c,{turn,clientId:payload.request,text:payload.text,images:payload.images},true);
-    if(c.draft.trim()===draft)c.draft='';c.files=c.files.filter(f=>!files.includes(f));
-    delete c.steerRequest
-  }catch(e){toast(e.message)}finally{pendingSteerReceipts.delete(c);delete c.steering;save();if(current()===c){composer();messages(false)}}
+    if(!externalSideTurn)addSupplement(c,{turn,clientId:payload.request,text:payload.text,images:payload.images},true);
+    if(c.draft.trim()===draft)c.draft='';c.files=(c.files||[]).filter(f=>!files.includes(f));
+    delete c.steerRequest;return true
+  }catch(e){toast(e.message)}finally{
+    pendingSteerReceipts.delete(c);delete c.steering;save();
+    if(current()===c){composer();messages(false)}
+    else if(visibleSideChat?.chat===c)visibleSideChat.sync()
+  }
 }
 $('steer').onclick=()=>$('composer').requestSubmit();
 $('composer').onsubmit=async e=>{e.preventDefault();const c=current(),submittedDraft=c.draft,text=submittedDraft.trim(),files=c.files;if(c.historyMissing||c.archived||!$('receiver-setup').hidden)return;if(submittedDraft.toLowerCase()==='/model'){openCommandModels({start:0,end:submittedDraft.length});return}

@@ -143,6 +143,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     let resumed=false;
     let externalDone=false;
+    let sharedRequest='',sharedAttempts=0;
     let parentReads=0,branchReads=0;
     let holdUpdates=false,releaseUpdates!:()=>void;
     const networkRestored=new Promise<void>(resolve=>{releaseUpdates=resolve});
@@ -158,6 +159,16 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       if(stop&&resumed&&path===base+'/api/thread-interrupt/'+thread+'/live-turn'){
         assert.equal(route.request().method(),'POST');
         externalDone=true;return route.fulfill({status:202,json:{}})
+      }
+      if(stop&&resumed&&path===base+'/api/thread-steer/'+thread){
+        const payload=route.request().postDataJSON();
+        assert.equal(payload.turn,'live-turn');assert.equal(payload.text,'侧聊补充');
+        if(!sharedAttempts++) {
+          sharedRequest=payload.request;
+          return route.fulfill({status:503,json:{error:'主机暂时未确认'}})
+        }
+        assert.equal(payload.request,sharedRequest);
+        return route.fulfill({json:{turn:'live-turn'}})
       }
       if(stop&&resumed&&path===base+'/api/threads'){
         const id=route.request().postDataJSON().thread;
@@ -223,6 +234,13 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
       const beforeFinal={parentReads,branchReads};
       const panel=page.locator('.side-chat'),field=panel.locator('textarea');
+      await field.fill('侧聊补充');
+      const supplement=panel.getByRole('button',{name:'补充要求',exact:true});
+      await supplement.click();
+      await page.getByText('主机暂时未确认',{exact:true}).waitFor();
+      assert.equal(await field.inputValue(),'侧聊补充');
+      await supplement.click();await supplement.waitFor({state:'hidden'});
+      assert.equal(await field.inputValue(),'');assert.equal(sharedAttempts,2);
       await field.fill('保留侧聊草稿');
       await field.press('Control+Enter');
       assert.equal(externalDone,false);
