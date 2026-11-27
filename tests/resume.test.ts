@@ -140,6 +140,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     let resumed=false;
     let externalDone=false;
+    let parentReads=0,branchReads=0;
     let holdUpdates=false,releaseUpdates!:()=>void;
     const networkRestored=new Promise<void>(resolve=>{releaseUpdates=resolve});
     await page.route(origin+'/**',async route=>{
@@ -154,6 +155,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       if(stop&&resumed&&path===base+'/api/threads'){
         const id=route.request().postDataJSON().thread;
         if(id){
+          if(id===thread)branchReads++;else parentReads++;
           const inherited={turn:'parent-turn',role:'user',text:'主聊天上下文'};
           const messages=id===thread?[inherited,{turn:'original-turn',role:'user',text:'原问题'},
             {turn:'other-client-turn',role:'assistant',text:'来自另一台设备的回复'}]:[inherited];
@@ -201,8 +203,11 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
       await messages.getByText('来自另一台设备的回复',{exact:true}).waitFor();
       await messages.getByText('跨端流式首段',{exact:true}).waitFor();
+      const beforeFinal={parentReads,branchReads};
       externalDone=true;
       await messages.getByText('跨端最终回复',{exact:true}).waitFor();
+      assert(branchReads>beforeFinal.branchReads);
+      assert.equal(parentReads,beforeFinal.parentReads);
       assert.equal(await messages.getByText('跨端流式首段',{exact:true}).count(),0);
       assert.equal(await messages.getByText('主聊天上下文',{exact:true}).count(),0);
       assert.equal(await messages.getByText('原问题',{exact:true}).count(),1);

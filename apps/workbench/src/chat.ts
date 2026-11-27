@@ -1139,33 +1139,45 @@ function mountSideChat(container,owner,chat){
   }
   pendingQuestions(chat,questions);
   let readingHistory=false,refreshAgain=false;
+  let inheritedTurns,inheritedFrom;
   async function refreshHistory(){
     if(chat.pending||!chat.thread||!owner.thread||!form.isConnected||!form.getClientRects().length||document.hidden)return;
     if(readingHistory){refreshAgain=true;return}
-    const thread=chat.thread,parent=chat.parent,updated=chat.updated;
+    const thread=chat.thread,sourceThread=owner.thread,parent=chat.parent,updated=chat.updated;
     readingHistory=true;
     try{
       const signal=AbortSignal.timeout(30000);
-      const [source,branch]=await Promise.all([owner.thread,thread].map(id=>threadApi({thread:id,shared:true},signal)));
-      if(!form.isConnected||chat.thread!==thread||chat.pending||chat.parent!==parent||chat.updated!==updated||
-        source.thread!==owner.thread||branch.thread!==thread||!Array.isArray(source.messages)||!Array.isArray(branch.messages))return;
-      const inherited=new Set(source.messages.map(row=>row.turn));
-      externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inherited.has(row.turn)):[];
-      if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
-      const known=new Set(chat.messages.map(row=>row.turn));
-      const history=chat.messages.slice();
-      let after=0;
-      let previousTurn;
-      for(const row of branch.messages){
-        if(!row.turn||inherited.has(row.turn)||branch.activeTurn===row.turn)continue;
-        if(known.has(row.turn)){
-          if(previousTurn!==row.turn)after=history.findLastIndex(local=>local.turn===row.turn)+1
-        }else{
-          history.splice(after++,0,row)
-        }
-        previousTurn=row.turn
+      const [source,branch]=await Promise.all([
+        inheritedFrom===sourceThread?null:threadApi({thread:sourceThread,shared:true},signal),
+        threadApi({thread,shared:true},signal)
+      ]);
+      if(!form.isConnected||chat.thread!==thread||owner.thread!==sourceThread||chat.pending||chat.parent!==parent||chat.updated!==updated)return;
+      if(source){
+        inheritedTurns=new Set(source.messages.map(row=>row.turn));
+        inheritedFrom=sourceThread
       }
-      if(history.length!==chat.messages.length){chat.messages=history;save()}
+      externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inheritedTurns.has(row.turn)):[];
+      if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
+      const ends=new Map(chat.messages.map((row,index)=>[row.turn,index+1]));
+      const insertions=new Map();
+      let after=0;
+      for(const row of branch.messages){
+        if(!row.turn||inheritedTurns.has(row.turn)||branch.activeTurn===row.turn)continue;
+        if(ends.has(row.turn)){
+          after=ends.get(row.turn)
+        }else{
+          if(!insertions.has(after))insertions.set(after,[]);
+          insertions.get(after).push(row)
+        }
+      }
+      if(insertions.size){
+        const history=(insertions.get(0)||[]).slice();
+        for(const [index,row] of chat.messages.entries()){
+          history.push(row);
+          for(const added of insertions.get(index+1)||[])history.push(added)
+        }
+        chat.messages=history;save()
+      }
       sync()
     }catch{/* The cached branch is available while the host is offline. */}
     finally{readingHistory=false;if(refreshAgain){refreshAgain=false;void refreshHistory()}}
