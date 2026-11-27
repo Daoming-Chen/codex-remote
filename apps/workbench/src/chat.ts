@@ -982,12 +982,6 @@ function createSideChat(owner){
   });
   list.push(chat);return sideRecord(chat,list.length-1)
 }
-document.addEventListener('keydown',event=>{
-  if((event.ctrlKey||event.metaKey)&&event.altKey&&!event.shiftKey&&event.code==='KeyS'&&!$('dialog').open){
-    if(!current().thread||current().archived)return;
-    event.preventDefault();if(!event.repeat)openRecord(sideChatTab)
-  }
-});
 const openingSideThreads=new WeakSet();
 let visibleSideChat;
 function mountSideChat(container,owner,chat){
@@ -3290,6 +3284,7 @@ const commands=[
   }},
   {name:'新聊天',icon:'square-pen',keys:['n','shift+o'],run:start},
   {name:'搜索聊天',icon:'search',keys:[],run:search},
+  {name:'打开侧边聊天',icon:'message-circle',keys:['alt+s'],available:()=>!!current().thread&&!current().archived,run:()=>openRecord(sideChatTab)},
   {name:'切换侧面板',icon:'panel-left',keys:['alt+b'],run:toggleWorkPanel},
   {name:'切换项目侧栏',icon:'panel-left',keys:['b','shift+s'],run:()=>action('sidebar')},
   {name:'后退',icon:'chevron-down',keys:['['],run:()=>$('chat-back').click()},
@@ -3508,7 +3503,8 @@ document.addEventListener('keydown',e=>{
     e.preventDefault();toggleSidebar();return
   }
   if(e.defaultPrevented||isCompositionKey(e)||e.getModifierState('AltGraph')||!(e.ctrlKey||e.metaKey))return;
-  const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+e.key.toLowerCase();
+  const letter=e.altKey&&e.code==='KeyS'?'s':e.key.toLowerCase();
+  const key=(e.altKey?'alt+':'')+(e.shiftKey?'shift+':'')+letter;
   if(commandMenuKeys.includes(key)){e.preventDefault();if(!e.repeat)commandMenu();return}
   if($('dialog').open)return;
   const command=commands.find(cmd=>cmd.keys.includes(key)&&(!cmd.available||cmd.available()));
