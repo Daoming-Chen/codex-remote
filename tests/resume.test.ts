@@ -31,7 +31,11 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     const start='行内 $x^2$ 和 \\(a_i\\)。\n\n$$\n\\frac{1}{';
     const answer=start+'2}\n$$\n\n\\[\\sqrt{x}\\]\n\n`$code$`，价格 $5 和 $10。\n\n```math\nx^3\n```';
     const longEquation=Array.from({length:80},(_,i)=>'x_{'+i+'}').join('+')+'=z';
-    const mixed=String.raw`结论：\[a^2+b^2=c^2\]，以及 $$E=mc^2$$。`;
+    const mixed=String.raw`结论：\[a^2+b^2=c^2\]，以及 $$E=mc^2$$。
+
+换行也属于同一个公式：\[a+
+b\]，以及 $$c+
+d$$。`;
     const boundary='\\[a+b\\] 是第一条。\n\n这段说明应该单独显示。\n\n\\[\nc+d\n\\]';
     const text=answer+'\n\n'+mixed+'\n\n'+boundary+'\n\n$$\n'+longEquation+'\n$$\n\n```math\n\\frac{1}{';
     let complete=false;
@@ -53,7 +57,7 @@ for(const side of [false,true])test('streamed Markdown finalizes TeX and preserv
     assert.equal(await messages.locator('.katex-error').count(),0);
     complete=true;
     await messages.locator('.answer .katex-error').waitFor();
-    assert.equal(await messages.locator('.katex').count(),10);
+    assert.equal(await messages.locator('.katex').count(),12);
     assert.equal(await messages.locator('.katex-display').count(),5);
     assert.equal(await messages.getByText('这段说明应该单独显示。',{exact:true}).count(),1);
     assert.equal(await messages.locator('code').innerText(),'$code$');

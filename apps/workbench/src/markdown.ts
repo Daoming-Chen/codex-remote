@@ -54,8 +54,8 @@ markdown.block.ruler.at('math_block_bracket', (state, start, end, silent) => {
 
 // The block rules handle standalone equations. Codex also accepts these
 // delimiters inside a paragraph, where the expression uses inline math.
-const bracketEquation = /\\\[((?:[^\\\n]|\\(?!\])[^\n])+)\\\]/y;
-const dollarEquation = /\$\$(?!\$)((?:[^$\\\n]|\\[^\n]|\$(?!\$))+)\$\$(?!\$)/y;
+const bracketEquation = /\\\[((?:[^\\]|\\(?!\])[\s\S])+)\\\]/y;
+const dollarEquation = /\$\$(?!\$)((?:[^$\\]|\\[\s\S]|\$(?!\$))+)\$\$(?!\$)/y;
 markdown.inline.ruler.before('escape', 'codex_inline_equation', (state, silent) => {
   const opening = state.src.slice(state.pos, state.pos + 2);
   const rule = opening === '\\[' ? bracketEquation : opening === '$$' ? dollarEquation : null;
