@@ -354,9 +354,11 @@ test('restore a streaming turn after sending on another device with the same thr
           wrongHost.push(path);
           return route.fulfill({status: 404});
         }
+        const firstParagraph = '第一台的第一段';
+        const finalAnswer = device.deviceId === 'a' ? firstParagraph + '\n\n第二段已完成' : 'b 的最终回复';
         const snapshot = {id: job.id, created: 1000, observedTextAt: 1100, thread: 'shared-thread', turn: 'shared-turn',
-          progress: job.done ? {} : {message: '第一台正在流式输出'},
-          status: job.done ? 'done' : 'running', answer: job.done ? device.deviceId + ' 的最终回复' : ''};
+          parts: [firstParagraph], progress: job.done ? {} : {message: '第二段正在输出'},
+          status: job.done ? 'done' : 'running', answer: job.done ? finalAnswer : ''};
         if (api.endsWith('/events')) return route.fulfill({contentType: 'text/event-stream',
           body: 'data: ' + JSON.stringify(snapshot) + '\n\n'});
         return route.fulfill({json: snapshot});
@@ -380,18 +382,24 @@ test('restore a streaming turn after sending on another device with the same thr
     const started = page.waitForRequest(req => req.url().includes('/api/turn/') && req.url().endsWith('/events'));
     await send('第一台的提问');
     await started;
-    await messages.getByText('第一台正在流式输出', {exact: true}).waitFor();
+    await messages.getByText('第二段正在输出', {exact: true}).waitFor();
     await select(1);
-    jobs.get('a')!.done = true;
     await send('第二台的提问');
     await messages.getByText('b 的最终回复', {exact: true}).waitFor();
-    assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台正在流式输出|a 的最终回复/);
+    assert.doesNotMatch(await messages.innerText(), /第一台的提问|第一台的第一段|第二段正在输出/);
     await page.getByRole('button', {name: '设置',exact:true}).click();
     await page.getByRole('button', {name: '连接信息',exact:true}).click();
     await page.getByText(/前台发送到页面收到首段正文/).waitFor();
     await page.keyboard.press('Escape');
     await select(0);
-    await messages.getByText('a 的最终回复', {exact: true}).waitFor();
+    await messages.getByText('第二段正在输出', {exact: true}).waitFor();
+    await page.reload();
+    await messages.getByText('第二段正在输出', {exact: true}).waitFor();
+    assert.equal(await messages.getByText('第一台的第一段', {exact: true}).count(), 1);
+    jobs.get('a')!.done = true;
+    await messages.getByText('第二段已完成', {exact: true}).waitFor();
+    assert.equal(await messages.getByText('第一台的第一段', {exact: true}).count(), 1);
+    assert.doesNotMatch(await messages.innerText(), /第二段正在输出/);
     assert.match(await messages.innerText(), /第一台的提问/);
     assert.doesNotMatch(await messages.innerText(), /第二台的提问|b 的最终回复/);
     assert.deepEqual(posts, ['a', 'b']);
