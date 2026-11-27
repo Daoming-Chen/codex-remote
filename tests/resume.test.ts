@@ -105,6 +105,35 @@ for (const hidden of [false,true]) test('network resume replaces a hanging table
   } finally { await browser.close() }
 });
 
+test('a timed-out device lookup starts fresh discovery without another Android network event', async () => {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({serviceWorkers:'block'});
+    await page.clock.install();
+    let reads=0;
+    await page.route(origin+'/**',route=>{
+      const path=new URL(route.request().url()).pathname;
+      if(path==='/devices')return route.fulfill({path:resolve(assets,'devices.html')});
+      if(path==='/api/devices'){
+        if(++reads===1)return;
+        assert.equal(route.request().headers()['x-receiver-network-resumed'],'1');
+        return route.fulfill({json:{devices:[host]}});
+      }
+      return route.abort();
+    });
+    const first=page.waitForRequest(req=>req.url().endsWith('/api/devices'));
+    await page.goto(origin+'/devices');
+    const stale=await first;
+    const aborted=page.waitForEvent('requestfailed',req=>req===stale);
+    await page.clock.fastForward(25001);
+    await aborted;
+    await page.getByRole('button',{name:'刷新设备',disabled:false}).waitFor();
+    await page.clock.fastForward(15001);
+    await page.getByRole('button',{name:/恢复测试主机.*在线/}).waitFor();
+    assert.equal(reads,2);
+  } finally { await browser.close() }
+});
+
 test('failed network resume retries once, restores the same turn and preserves the unsent draft', async () => {
   const browser = await launch();
   try {

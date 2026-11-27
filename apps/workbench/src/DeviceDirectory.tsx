@@ -34,7 +34,11 @@ function DeviceDirectory() {
       try {
         const request = new AbortController();
         pending = request;
-        const timeout = window.setTimeout(() => request.abort(), 25000);
+        const timeout = window.setTimeout(() => {
+          // The receiver may still be discovering hosts after this WebView request expires.
+          resumeNetwork = true;
+          request.abort();
+        }, 25000);
         let response, data;
         try {
           const headers: Record<string,string> = resumeNetwork ? {'X-Receiver-Network-Resumed':'1'} : {};
