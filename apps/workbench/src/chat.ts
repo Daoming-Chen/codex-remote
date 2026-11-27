@@ -2647,7 +2647,7 @@ function positionSidebarMenu(anchor){
 }
 function options(c,anchor=null){const body=modal('聊天选项',anchor);if(anchor?.closest('.history-row'))positionSidebarMenu(anchor);body.append(row('新聊天','square-pen',()=>start()),row('选择远程项目','folder-open',()=>remotePicker(true)),row('已归档聊天','message-circle',archives),row('设置','sliders-horizontal',settings));if(c===current()&&!c.archived&&!c.pending&&!c.activeTurn&&(!nativePermissionMode||c.collaborationMode==='plan'))body.append(row(c.collaborationMode==='plan'?'退出计划模式':'启用计划模式','sliders-horizontal',togglePlanMode));if(c===current()&&c.messages?.length)body.append(row('在当前聊天中查找','search',()=>{closeDialog();openThreadFind()}));if(anchor?.closest('.history-row'))body.querySelector('button')?.focus();if(c.archived||(!c.thread&&!c.messages?.length))return;
   if(c.thread&&anchor?.id==='header-options'){
-    body.append(row('打开侧边聊天','message-circle',()=>{
+    body.append(row('新建侧边聊天','square-pen',()=>{
       closeDialog();openRecord(sideChatTab)
     }))
   }

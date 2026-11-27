@@ -675,7 +675,7 @@ test('show tabs opens one combobox for project files and approved host web apps 
     assert(await page.locator('#workbench').isHidden());
     assert.equal(await page.locator('#prompt').inputValue(),'保留草稿');
     await page.locator('#header-options').tap();
-    await page.getByRole('button',{name:'打开侧边聊天',exact:true}).tap();
+    await page.getByRole('button',{name:'新建侧边聊天',exact:true}).tap();
     const sideDraft=page.getByRole('textbox',{name:'在侧边聊天中提问'});
     await sideDraft.fill('侧边草稿');
     await page.keyboard.press('Control+Alt+s');
