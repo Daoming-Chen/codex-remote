@@ -1046,8 +1046,10 @@ function mountSideChat(container,owner,chat){
   form.append(attachments,field,picker,actions);container.classList.add('side-chat');container.append(empty,transcript,status,questions,form);
   fitEditor(field);
   const entries=[];
+  let externalRows=[],externalPreview=null,sideEvents=null,previewFrame=0;
   function sync(){
     if(!container.isConnected)return;
+    syncSubscription();
     modelLabel(chat,modelTrigger);
     const ordered=chat.pending&&orderedSnapshots.get(chat);
     const rows=[];
@@ -1057,6 +1059,15 @@ function mountSideChat(container,owner,chat){
       if(m.role==='assistant'&&m.interrupted)rows.push({role:'status',turn:m.turn,status:'interrupted',turnDurationMs:m.turnDurationMs})
     };
     for(const m of ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)appendRow(m);
+    if(!chat.pending){
+      const live=externalRows.slice();
+      if(externalPreview){
+        const index=live.findIndex(m=>m.role==='assistant'&&m.turn===externalPreview.turn&&m.id===externalPreview.id);
+        if(index<0)live.push(externalPreview);
+        else if(externalPreview.text.startsWith(live[index].text))live[index]=externalPreview
+      }
+      for(const row of live)appendRow(row)
+    }
     if(!ordered?.length&&chat.pending)appendRow({role:'assistant',turn:chat.turn,text:chat.preview,items:chat.items});
     const endings=endedActivityTurns(chat);
     empty.hidden=rows.length>0;transcript.hidden=!empty.hidden;
@@ -1139,6 +1150,8 @@ function mountSideChat(container,owner,chat){
       if(!form.isConnected||chat.thread!==thread||chat.pending||chat.parent!==parent||chat.updated!==updated||
         source.thread!==owner.thread||branch.thread!==thread||!Array.isArray(source.messages)||!Array.isArray(branch.messages))return;
       const inherited=new Set(source.messages.map(row=>row.turn));
+      externalRows=branch.activeTurn?branch.messages.filter(row=>row.turn===branch.activeTurn&&!inherited.has(row.turn)):[];
+      if(externalPreview&&branch.messages.some(row=>row.turn===externalPreview.turn)&&branch.activeTurn!==externalPreview.turn)externalPreview=null;
       const known=new Set(chat.messages.map(row=>row.turn));
       const history=chat.messages.slice();
       let after=0;
@@ -1152,11 +1165,39 @@ function mountSideChat(container,owner,chat){
         }
         previousTurn=row.turn
       }
-      if(history.length!==chat.messages.length){chat.messages=history;save();sync()}
+      if(history.length!==chat.messages.length){chat.messages=history;save()}
+      sync()
     }catch{/* The cached branch is available while the host is offline. */}
     finally{readingHistory=false;if(refreshAgain){refreshAgain=false;void refreshHistory()}}
   }
-  visibleSideChat={chat,sync,questions,form,refreshHistory};sync();
+  function syncSubscription(){
+    const visible=form.isConnected&&form.getClientRects().length&&!document.hidden;
+    if(!visible||chat.pending||!chat.thread){
+      sideEvents?.close();sideEvents=null;externalPreview=null;externalRows=[];
+      if(!form.isConnected)sizeObserver.disconnect();
+      return
+    }
+    if(sideEvents||typeof EventSource!=='function')return;
+    const source=sideEvents=new EventSource(devicePath+'/api/thread-events/'+chat.thread);
+    source.onmessage=e=>{
+      if(source===sideEvents&&(e.data==='READY'||e.data==='CHANGED'))void refreshHistory()
+    };
+    source.onerror=()=>{if(source===sideEvents&&externalPreview)externalPreview.disconnected=true};
+    source.addEventListener?.('text',event=>{
+      if(source!==sideEvents||chat.pending)return;
+      let packet;try{packet=JSON.parse(event.data)}catch{return}
+      if(!Array.isArray(packet))return;
+      const [turn,id,delta]=packet;
+      if(typeof turn!=='string'||typeof id!=='string')return;
+      if(delta===null)externalPreview={role:'assistant',turn,id,text:''};
+      else if(typeof delta==='string'&&externalPreview?.id===id&&externalPreview.turn===turn&&!externalPreview.disconnected)externalPreview.text+=delta;
+      else return;
+      if(!previewFrame)previewFrame=requestAnimationFrame(()=>{previewFrame=0;if(source===sideEvents)sync()})
+    })
+  }
+  const sizeObserver=new ResizeObserver(syncSubscription);
+  sizeObserver.observe(form);
+  visibleSideChat={chat,sync,questions,form,refreshHistory,syncSubscription};sync();
   void refreshHistory();
   async function prepareThread(){
     if(openingSideThreads.has(chat))return false;
@@ -1168,7 +1209,7 @@ function mountSideChat(container,owner,chat){
         body:JSON.stringify({thread:owner.thread,request:chat.forkRequest,sideChat:true})});
       const result=await res.json();
       if(!res.ok||!result.thread||result.thread===owner.thread)throw Error(result.error||'无法创建侧边聊天');
-      chat.thread=result.thread;save();return true
+      chat.thread=result.thread;save();syncSubscription();return true
     }catch(error){chat.error=error.message;save();return false}
     finally{
       openingSideThreads.delete(chat);
@@ -4466,6 +4507,7 @@ async function syncArchiveFlags(chats){
 }
 document.addEventListener('visibilitychange',()=>{
   syncThreadWatch();
+  visibleSideChat?.syncSubscription();
   if(!document.hidden)void visibleSideChat?.refreshHistory();
   if(!document.hidden&&current()&&attachedSideChats(current()).some(side=>side.unreadReply))renderWorkbench();
   const c=current();

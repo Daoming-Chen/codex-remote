@@ -139,6 +139,7 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
     },{thread,job,scope:host.scope,side});
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     let resumed=false;
+    let externalDone=false;
     let holdUpdates=false,releaseUpdates!:()=>void;
     const networkRestored=new Promise<void>(resolve=>{releaseUpdates=resolve});
     await page.route(origin+'/**',async route=>{
@@ -156,8 +157,14 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
           const inherited={turn:'parent-turn',role:'user',text:'主聊天上下文'};
           const messages=id===thread?[inherited,{turn:'original-turn',role:'user',text:'原问题'},
             {turn:'other-client-turn',role:'assistant',text:'来自另一台设备的回复'}]:[inherited];
+          if(id===thread&&externalDone)messages.push({turn:'live-turn',role:'assistant',text:'跨端最终回复'});
           return route.fulfill({json:{thread:id,messages}})
         }
+      }
+      if(stop&&path===base+'/api/thread-events/'+thread){
+        const text=(delta:string|null)=>'event: text\ndata: '+JSON.stringify(['live-turn','live-item',delta])+'\n\n';
+        return route.fulfill({contentType:'text/event-stream',body:externalDone?'data: CHANGED\n\n':
+          'retry: 200\n\n'+text(null)+text('跨端')+text('流式首段')})
       }
       if(path.startsWith(base+'/api/turn/'+job)){
         if(holdUpdates)await networkRestored;
@@ -193,6 +200,10 @@ for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reo
       await page.reload();
       await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
       await messages.getByText('来自另一台设备的回复',{exact:true}).waitFor();
+      await messages.getByText('跨端流式首段',{exact:true}).waitFor();
+      externalDone=true;
+      await messages.getByText('跨端最终回复',{exact:true}).waitFor();
+      assert.equal(await messages.getByText('跨端流式首段',{exact:true}).count(),0);
       assert.equal(await messages.getByText('主聊天上下文',{exact:true}).count(),0);
       assert.equal(await messages.getByText('原问题',{exact:true}).count(),1);
       await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).waitFor()
