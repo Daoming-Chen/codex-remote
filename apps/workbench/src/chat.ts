@@ -1053,7 +1053,8 @@ function mountSideChat(container,owner,chat){
     const rows=[];
     const appendRow=m=>{
       if(m.items?.length)rows.push({role:'activity',turn:m.turn,id:m.items[0].id,items:m.items});
-      if(m.role!=='activity'&&(m.text||m.images?.length||m.role==='steps'))rows.push(m)
+      if(m.role!=='activity'&&(m.text||m.images?.length||m.role==='steps'||m.role==='status'))rows.push(m);
+      if(m.role==='assistant'&&m.interrupted)rows.push({role:'status',turn:m.turn,status:'interrupted',turnDurationMs:m.turnDurationMs})
     };
     for(const m of ordered?.length?chat.messages.filter(m=>!ordered.includes(m)).concat(ordered):chat.messages)appendRow(m);
     if(!ordered?.length&&chat.pending)appendRow({role:'assistant',turn:chat.turn,text:chat.preview,items:chat.items});
@@ -1079,6 +1080,11 @@ function mountSideChat(container,owner,chat){
           activity(row.items,ending,row.turn,details,chat);
           entry.activitySnapshot=snapshot
         }
+        continue
+      }
+      if(role==='status'){
+        entry.message.className='quiet';
+        entry.message.textContent=turnStatusLabel(row);
         continue
       }
       if(role==='steps'||role==='plan'){
@@ -2039,6 +2045,9 @@ function turnTimeLabel(ms,stopped=false){
   const time=[h&&h+'小时',m&&m+'分钟',(s||!total)?s+'秒':''].filter(Boolean).join(' ');
   return (stopped?'你已停止，已用时 ':'用时 ')+time
 }
+function turnStatusLabel(row){
+  return row.status==='interrupted'?turnTimeLabel(row.turnDurationMs,true):row.text||'任务执行失败'
+}
 function updateJumpButton(){
   const pane=$('scroller'),button=$('jump-latest');
   const show=!!pane.clientHeight&&pane.scrollHeight-pane.scrollTop-pane.clientHeight>112;
@@ -2111,7 +2120,7 @@ function messages(jump=true){renderWorkbench();const c=current();if(readingReply
     for(const m of rows.slice(retained)){if(m.role==='user'){added.append(userBubble(m));continue}
       if(m.role==='activity'){added.append(activity(m.items,ended.get(m.turn),m.turn));continue}
       if(m.role==='steps'||m.role==='plan'){added.append(planCard(m));continue}
-      if(m.role==='status'){added.append(element('p','quiet',m.status==='interrupted'?turnTimeLabel(m.turnDurationMs,true):m.text||'任务执行失败'));continue}
+      if(m.role==='status'){added.append(element('p','quiet',turnStatusLabel(m)));continue}
       const outer=element('article','msg'),key=m.id?'assistant-'+m.id:null,last=(key||m===finalReply)?finished.get(key):null;
       const reuse=last&&m.text?.startsWith(last.text),body=reuse?last.node:element('div','answer');
       if(m.items?.length)outer.append(activity(m.items,ended.get(m.turn),m.turn));

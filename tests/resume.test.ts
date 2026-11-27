@@ -123,17 +123,19 @@ test('foreground recovery replaces a pending history read without reporting a ho
   }finally{await browser.close()}
 });
 
-for(const side of [false,true])test('cold reopening a reconnecting turn preserves received text, side='+side,async()=>{
+for(const [side,stop] of [[false,false],[true,false],[true,true]])test('cold reopening a reconnecting turn preserves received text, side='+side+', stop='+stop,async()=>{
   const browser=await launch();
   try{
     const page=await browser.newPage({serviceWorkers:'block'});
     const thread='00000000-0000-4000-8000-000000000021',job='00000000-0000-4000-8000-000000000022';
     await page.addInitScript(({thread,job,scope,side})=>{
       const chat={id:thread,thread,pending:job,title:'原聊天',messages:[{role:'user',text:'原问题'}],draft:'',files:[]};
+      const key='receiver:'+scope+':tim-ser-chats-v2';
+      if(localStorage.getItem(key))return;
       const tab='receiver:side-chat';
       const owner=side?{...chat,id:'parent',thread:'00000000-0000-4000-8000-000000000020',pending:null,
         sideChats:[chat],workView:{ids:[tab],active:tab}}:chat;
-      localStorage.setItem('receiver:'+scope+':tim-ser-chats-v2',JSON.stringify({active:owner.id,chats:[owner]}));
+      localStorage.setItem(key,JSON.stringify({active:owner.id,chats:[owner]}));
     },{thread,job,scope:host.scope,side});
     const template=await readFile(resolve(assets,'index.html'),'utf8');
     let resumed=false;
@@ -143,9 +145,15 @@ for(const side of [false,true])test('cold reopening a reconnecting turn preserve
       const path=new URL(route.request().url()).pathname;
       if(path===base+'/')return route.fulfill({contentType:'text/html',body:renderWorkbenchPage(template,{
         deviceName:host.name,scope:host.scope,version:'0123456789abcdef',dictationEngine:'browser'})});
+      if(path===base+'/api/interrupt/'+job && stop){
+        assert.equal(route.request().method(),'POST');
+        resumed=true;releaseUpdates();
+        return route.fulfill({status:202,json:{id:job}})
+      }
       if(path.startsWith(base+'/api/turn/'+job)){
         if(holdUpdates)await networkRestored;
-        const snapshot={id:job,thread,turn:'original-turn',status:resumed?'done':'waiting',reconnecting:!resumed,
+        const snapshot={id:job,thread,turn:'original-turn',status:resumed?(stop?'interrupted':'done'):'waiting',reconnecting:!resumed,
+          turnDurationMs:resumed?12000:undefined,
           parts:['已收到的第一段'],progress:{message:'已收到的第二段',items:[{id:'check',type:'commandExecution',
             command:'pwd',status:resumed?'completed':'inProgress',output:resumed?'remote-dir':'remote-'}]},answer:'已收到的第一段\n\n已收到的第二段。'};
         return path.endsWith('/events')?route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify(snapshot)+'\n\n'}):route.fulfill({json:snapshot});
@@ -167,10 +175,16 @@ for(const side of [false,true])test('cold reopening a reconnecting turn preserve
     holdUpdates=true;
     await page.reload({waitUntil:'domcontentloaded'});
     await messages.getByText('已收到的第二段',{exact:true}).waitFor({timeout:4000});
-    resumed=true;
-    releaseUpdates();
+    if(stop)await page.locator('.side-chat').getByRole('button',{name:'停止',exact:true}).click();
+    else{resumed=true;releaseUpdates()}
     await messages.getByText('已收到的第二段。',{exact:true}).waitFor();
     assert.equal(await messages.getByText('已收到的第一段',{exact:true}).count(),1);
+    if(stop){
+      await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
+      await page.reload();
+      await messages.getByText('你已停止，已用时 12秒',{exact:true}).waitFor();
+      await page.locator('.side-chat').getByRole('button',{name:'发送',exact:true}).waitFor()
+    }
     if(side){
       const timeline=messages.locator('.timeline');
       assert.equal(await timeline.count(),1);
