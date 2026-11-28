@@ -21,14 +21,15 @@ def main():
     if not npm:
         parser.error("npm not found")
     patches = [Path(__file__).resolve().with_name(f"ds-harness-remote-0.6.8-{name}.patch")
-               for name in ("service-tier", "approval-reviewer", "goals", "upload", "download", "model-defaults")]
+               for name in ("service-tier", "approval-reviewer", "goals", "upload", "download", "model-defaults", "host-permissions", "antigravity-windows", "antigravity-usage")]
     with tempfile.TemporaryDirectory() as temporary:
         source = Path(temporary) / "plugin"
         shutil.copytree(args.plugin, source, ignore=shutil.ignore_patterns("node_modules", ".git"))
-        helper = Path(__file__).resolve().with_name("attachment-upload.mjs")
-        shutil.copyfile(helper, source / "dist" / helper.name)
-        if "dist/" + helper.name not in manifest["files"]:
-            manifest["files"].append("dist/" + helper.name)
+        for name in ("attachment-upload.mjs", "antigravity-usage.mjs"):
+            helper = Path(__file__).resolve().with_name(name)
+            shutil.copyfile(helper, source / "dist" / name)
+            if "dist/" + name not in manifest["files"]:
+                manifest["files"].append("dist/" + name)
         (source / "package.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         # An installed compatibility build can be the source for the next release.
         # Normalize its known patches in the temporary copy before applying the set.

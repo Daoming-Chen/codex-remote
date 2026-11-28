@@ -1,0 +1,29 @@
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -102214,6 +102214,7 @@
+   "dsh/directoryList": external_exports.object({
+     path: external_exports.string().min(1).max(4096)
+   }).strict(),
++  "dsh/antigravityUsage": external_exports.object({}).strict(),
+   "dsh/workspaceList": external_exports.object({
+     backend: backendId.optional()
+   }).strict().optional(),
+@@ -103571,6 +103572,18 @@
+     assertCurrent();
+     if (call.method === "dsh/directoryList") {
+       return this.listDirectory(String(call.params.path));
++    }
++    if (call.method === "dsh/antigravityUsage") {
++      this.requireAcp("antigravity");
++      const backend = this.config.backends.find(item => item.id === "antigravity");
++      const { readAntigravityUsage } = await import("./antigravity-usage.mjs");
++      try {
++        const groups = await readAntigravityUsage(execFileCommand, resolveAntigravityBinary(backend.command), backend.cwd);
++        assertCurrent();
++        return { groups };
++      } catch {
++        throw new RpcError("ANTIGRAVITY_USAGE_UNAVAILABLE", "The Host Antigravity CLI did not return quota.");
++      }
+     }
+     if (call.method === "dsh/workspaceList") {
+       const requestedBackend = typeof call.params.backend === "string" ? call.params.backend : this.defaultBackend();
