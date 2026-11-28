@@ -3,6 +3,8 @@ import android.app.*;
 import android.os.*;
 import android.content.*;
 import android.net.Uri;
+import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -25,8 +27,11 @@ public final class ReceiverActivity extends Activity {
     private PreviewSurface preview;
     private static final int SELECT_ATTACHMENTS=1201;
     private static final int SAVE_REMOTE_FILE=1204;
-    private String exportRoute, exportRequest, exportMime;
-    private ProgressDialog downloadProgress;
+    private String exportRoute, exportRequest, exportMime, exportName;
+    private boolean downloading;
+    private String downloadId, downloadPage, downloadName, downloadMime;
+    private Uri savedDownload, savedFolder;
+    private JSONObject downloadState;
     private static final int VOICE_MICROPHONE=1202;
     private static final int CONNECTION_NOTIFICATIONS=1203;
     private PermissionRequest pendingMicrophone;
@@ -113,6 +118,7 @@ public final class ReceiverActivity extends Activity {
             exportRoute=state.getString("exportRoute");
             exportRequest=state.getString("exportRequest");
             exportMime=state.getString("exportMime");
+            exportName=state.getString("exportName");
         }
         super.onCreate(state);
         workbenchPath=state==null?lastWorkbenchPath:restorePath(state.getString(SAVED_PATH));
@@ -144,11 +150,13 @@ public final class ReceiverActivity extends Activity {
                     if(!foreground||!pageReady||currentUrl==null||!isWorkbenchOrigin(Uri.parse(currentUrl)))return;
                     String path=Uri.parse(currentUrl).getPath();
                     if(path==null||!path.matches("/devices/[0-9a-f]{64}/?")||request==null||request.length()>16384)return;
-                    if(exportRequest!=null){Toast.makeText(ReceiverActivity.this,"请先选择保存位置",Toast.LENGTH_SHORT).show();return;}
+                    if(exportRequest!=null||downloading){Toast.makeText(ReceiverActivity.this,"请等待当前文件保存完成",Toast.LENGTH_SHORT).show();return;}
                     exportRoute=path.replaceFirst("/$","")+"/api/project-file-download";
                     exportRequest=request;
                     exportMime=mime!=null&&mime.matches("[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+")?mime:"application/octet-stream";
                     String filename=name==null?"file":new File(name.replace('\\','/')).getName();
+                    exportName=filename.replaceAll("[\\p{Cntrl}]","_").trim();
+                    if(exportName.isEmpty()||exportName.equals(".")||exportName.equals(".."))exportName="file";
                     int dot=filename.lastIndexOf('.');
                     if(filename.toLowerCase(java.util.Locale.ROOT).endsWith(".apk")){
                         exportMime="application/vnd.android.package-archive";
@@ -157,10 +165,33 @@ public final class ReceiverActivity extends Activity {
                             filename.substring(dot+1).toLowerCase(java.util.Locale.ROOT));
                         if(detected!=null)exportMime=detected;
                     }
-                    Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType(exportMime).putExtra(Intent.EXTRA_TITLE,filename);
+                    if(Build.VERSION.SDK_INT>=29){startExport(null);return;}
+                    String saved=getPreferences(MODE_PRIVATE).getString("downloadTree",null);
+                    for(UriPermission grant:getContentResolver().getPersistedUriPermissions()){
+                        if(grant.isWritePermission()&&grant.getUri().toString().equals(saved)){startExport(grant.getUri());return;}
+                    }
+                    Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                     try{startActivityForResult(intent,SAVE_REMOTE_FILE);}
                     catch(ActivityNotFoundException e){exportRequest=null;Toast.makeText(ReceiverActivity.this,"系统文件选择器不可用",Toast.LENGTH_LONG).show();}
+                });
+            }
+            @JavascriptInterface public void openSaved(String id){
+                runOnUiThread(()->{if(canUseDownload(id))openSavedDownload();});
+            }
+            @JavascriptInterface public void showDownloads(String id){
+                runOnUiThread(()->{
+                    if(!canUseDownload(id))return;
+                    try{
+                        if(savedFolder==null)startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS));
+                        else{
+                            Uri folder=DocumentsContract.buildDocumentUriUsingTree(savedFolder,DocumentsContract.getTreeDocumentId(savedFolder));
+                            Intent open=new Intent(Intent.ACTION_VIEW).setDataAndType(folder,DocumentsContract.Document.MIME_TYPE_DIR)
+                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            startActivity(open);
+                        }
+                    }
+                    catch(ActivityNotFoundException|SecurityException error){reportDownload("openError","请从系统文件管理器查看已保存的文件",0,-1);}
                 });
             }
         },"ReceiverFiles");
@@ -265,7 +296,7 @@ public final class ReceiverActivity extends Activity {
                 if(!localPageFailed&&isWorkbenchOrigin(Uri.parse(url))){
                     lastWorkbenchPath=restorePath(Uri.parse(url).getEncodedPath());
                     pageRetryDelay=500;
-                    pageReady=true;refreshAuthorizedChat();
+                    pageReady=true;refreshAuthorizedChat();deliverDownloadState();
                     syncConnectionService();
                     if(needsRecovery)scheduleRecovery(0);
                 }
@@ -317,11 +348,13 @@ public final class ReceiverActivity extends Activity {
         pendingFiles=null;
         if(callback!=null)callback.onReceiveValue(files);
     }
-    private void exportRemoteFile(Uri target,String route,String payload,String mime){
+    private void exportRemoteFile(Uri tree,String route,String payload,String mime,String filename){
+        Uri destination=null;
+        boolean saved=false;
         java.net.HttpURLConnection connection=null;
         File staged=null;
         try{
-            if(!"content".equals(target.getScheme())||!route.matches("/devices/[0-9a-f]{64}/api/project-file-download"))
+            if(!route.matches("/devices/[0-9a-f]{64}/api/project-file-download"))
                 throw new IOException("无效的文件位置");
             connection=(java.net.HttpURLConnection)new java.net.URL(origin+route).openConnection();
             connection.setInstanceFollowRedirects(false);
@@ -353,68 +386,119 @@ public final class ReceiverActivity extends Activity {
                     long now=SystemClock.elapsedRealtime();
                     if(now>=nextUpdate||bytes==total){
                         final int received=(int)bytes;
-                        runOnUiThread(()->{
-                            if(downloadProgress==null)return;
-                            if(total>0&&total<=64L*1024*1024){
-                                downloadProgress.setIndeterminate(false);
-                                downloadProgress.setMax((int)total);
-                                downloadProgress.setProgress(received);
-                            }
-                            downloadProgress.setMessage("已下载 "+android.text.format.Formatter.formatFileSize(this,received)
-                                +(total>=0?" / "+android.text.format.Formatter.formatFileSize(this,total):""));
-                        });
+                        String size=android.text.format.Formatter.formatFileSize(this,received)
+                            +(total>=0?" / "+android.text.format.Formatter.formatFileSize(this,total):"");
+                        runOnUiThread(()->reportDownload("receiving",size,received,total));
                         nextUpdate=now+150;
                     }
                 }
             }
             if(total>=0&&bytes!=total)
                 throw new IOException("主机文件传输不完整");
-            runOnUiThread(()->{if(downloadProgress!=null)downloadProgress.setMessage("正在写入所选位置…");});
-            try(OutputStream out=getContentResolver().openOutputStream(target,"wt")){
-                if(out==null)throw new IOException("无法写入所选位置");
+            runOnUiThread(()->reportDownload("saving","正在保存文件…",0,-1));
+            if(tree==null && Build.VERSION.SDK_INT>=29){
+                ContentValues values=new ContentValues();
+                values.put(MediaStore.Downloads.DISPLAY_NAME,filename);
+                values.put(MediaStore.Downloads.MIME_TYPE,mime);
+                values.put(MediaStore.Downloads.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS);
+                values.put(MediaStore.Downloads.IS_PENDING,1);
+                destination=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values);
+            }else if(tree!=null){
+                Uri parent=DocumentsContract.buildDocumentUriUsingTree(tree,DocumentsContract.getTreeDocumentId(tree));
+                destination=DocumentsContract.createDocument(getContentResolver(),parent,mime,filename);
+            }
+            if(destination==null)throw new IOException("无法创建下载文件");
+            final Uri target=destination;
+            try(OutputStream out=getContentResolver().openOutputStream(target,"w")){
+                if(out==null)throw new IOException("无法写入下载文件");
                 Files.copy(staged.toPath(),out);
             }
+            if(tree==null && Build.VERSION.SDK_INT>=29){
+                ContentValues values=new ContentValues();
+                values.put(MediaStore.Downloads.IS_PENDING,0);
+                if(getContentResolver().update(target,values,null,null)!=1)throw new IOException("无法完成保存");
+            }
+            saved=true;
             runOnUiThread(()->{
-                closeDownloadProgress();
-                if(isFinishing()||isDestroyed())return;
-                new AlertDialog.Builder(this).setMessage("文件已保存").setNegativeButton("完成",null)
-                    .setPositiveButton("打开文件",(dialog,which)->{
-                        Intent open=new Intent(Intent.ACTION_VIEW).setDataAndType(target,mime)
-                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        try{startActivity(Intent.createChooser(open,"打开文件"));}
-                        catch(ActivityNotFoundException error){Toast.makeText(this,"未找到可打开此文件的应用",Toast.LENGTH_LONG).show();}
-                    }).show();
+                downloading=false;savedDownload=target;savedFolder=tree;
+                reportDownload("done",tree==null?"已保存到系统「下载」目录":"已保存到选定文件夹",0,-1);
             });
         }catch(Exception error){
+            if(tree!=null && (error instanceof SecurityException||error instanceof FileNotFoundException))
+                getPreferences(MODE_PRIVATE).edit().remove("downloadTree").apply();
             runOnUiThread(()->{
-                closeDownloadProgress();
-                Toast.makeText(this,"保存失败："+error.getMessage(),Toast.LENGTH_LONG).show();
+                downloading=false;reportDownload("failed","保存失败："+error.getMessage(),0,-1);
             });
         }finally{
+            if(!saved&&destination!=null)try{
+                if(tree==null)getContentResolver().delete(destination,null,null);
+                else DocumentsContract.deleteDocument(getContentResolver(),destination);
+            }catch(Exception ignored){}
             if(connection!=null)connection.disconnect();
             if(staged!=null)staged.delete();
         }
     }
-    private void closeDownloadProgress(){
-        if(downloadProgress!=null){downloadProgress.dismiss();downloadProgress=null;}
+    private void startExport(Uri tree){
+        String route=exportRoute,payload=exportRequest,mime=exportMime,filename=exportName;
+        exportRequest=null;exportRoute=null;exportMime=null;exportName=null;
+        downloading=true;savedDownload=null;
+        downloadId=UUID.randomUUID().toString();downloadPage=route.substring(0,route.indexOf("/api/"));
+        downloadName=filename;downloadMime=mime;
+        reportDownload("starting","正在等待远程电脑…",0,-1);
+        new Thread(()->exportRemoteFile(tree,route,payload,mime,filename),"remote-file-export").start();
+    }
+    private boolean onDownloadPage(){
+        if(!pageReady||isFinishing()||isDestroyed()||web.getUrl()==null||downloadPage==null)return false;
+        Uri page=Uri.parse(web.getUrl());
+        return isWorkbenchOrigin(page)&&(downloadPage.equals(page.getPath())||(downloadPage+"/").equals(page.getPath()));
+    }
+    private boolean canUseDownload(String id){
+        return foreground&&onDownloadPage()&&savedDownload!=null&&downloadId.equals(id);
+    }
+    private void reportDownload(String phase,String message,long bytes,long total){
+        try{
+            downloadState=new JSONObject().put("id",downloadId).put("phase",phase).put("name",downloadName)
+                .put("message",message).put("bytes",bytes).put("total",total);
+        }catch(org.json.JSONException error){throw new IllegalStateException(error);}
+        deliverDownloadState();
+    }
+    private void deliverDownloadState(){
+        if(downloadState!=null&&onDownloadPage())
+            web.evaluateJavascript("window.receiverDownloadChanged?.("+downloadState.toString()+")",null);
+    }
+    private void viewSaved(String mime){
+        Intent intent=new Intent(Intent.ACTION_VIEW).setDataAndType(savedDownload,mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.setClipData(ClipData.newRawUri(downloadName,savedDownload));
+        startActivity(intent);
+    }
+    private void openSavedDownload(){
+        try{
+            try{viewSaved(downloadMime);}
+            catch(ActivityNotFoundException missing){
+                if(downloadMime.startsWith("text/")&&!downloadMime.equals("text/plain")||
+                    downloadMime.equals("application/json")||downloadMime.endsWith("+json")||
+                    downloadMime.equals("application/xml")||downloadMime.endsWith("+xml"))viewSaved("text/plain");
+                else throw missing;
+            }
+        }catch(ActivityNotFoundException error){
+            reportDownload("openError","文件已保存。设备上没有可打开此格式的应用。",0,-1);
+        }catch(SecurityException error){
+            reportDownload("openError","文件已保存。系统未允许打开，请在文件管理器中查看。",0,-1);
+        }
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
         if(request==SAVE_REMOTE_FILE){
-            String route=exportRoute,payload=exportRequest,mime=exportMime;
-            exportRequest=null;exportRoute=null;exportMime=null;
-            if(result==RESULT_OK&&data!=null&&data.getData()!=null&&payload!=null&&route!=null){
-                Uri target=data.getData();
-                downloadProgress=new ProgressDialog(this);
-                downloadProgress.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
-                downloadProgress.setTitle("下载文件");
-                downloadProgress.setMessage("正在等待远程电脑…");
-                downloadProgress.setProgressNumberFormat(null);
-                downloadProgress.setIndeterminate(true);
-                downloadProgress.setCancelable(false);
-                downloadProgress.show();
-                new Thread(()->exportRemoteFile(target,route,payload,mime),"remote-file-export").start();
-            }
+            if(result==RESULT_OK&&data!=null&&data.getData()!=null&&exportRequest!=null){
+                Uri tree=data.getData();
+                try{
+                    int flags=data.getFlags()&(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    getContentResolver().takePersistableUriPermission(tree,flags);
+                    getPreferences(MODE_PRIVATE).edit().putString("downloadTree",tree.toString()).apply();
+                    startExport(tree);
+                }catch(SecurityException e){exportRequest=null;Toast.makeText(this,"无法取得文件夹写入权限",Toast.LENGTH_LONG).show();}
+            }else exportRequest=null;
             return;
         }
         if(request!=SELECT_ATTACHMENTS)return;
@@ -567,6 +651,7 @@ public final class ReceiverActivity extends Activity {
         state.putString("exportRoute",exportRoute);
         state.putString("exportRequest",exportRequest);
         state.putString("exportMime",exportMime);
+        state.putString("exportName",exportName);
     }
     @Override protected void onResume(){
         super.onResume();foreground=true;web.onResume();preview.resume();handler.post(refresh);
@@ -587,5 +672,5 @@ public final class ReceiverActivity extends Activity {
             if(!isFinishing()&&!isDestroyed()&&!"true".equals(handled))navigateBack();
         });
     }
-    @Override protected void onDestroy(){closeDownloadProgress();networks.unregisterNetworkCallback(networkCallback);handler.removeCallbacks(notifyRecovery);handler.removeCallbacks(refresh);finishFiles(null);preview.clear();web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){networks.unregisterNetworkCallback(networkCallback);handler.removeCallbacks(notifyRecovery);handler.removeCallbacks(refresh);finishFiles(null);preview.clear();web.destroy();super.onDestroy();}
 }
