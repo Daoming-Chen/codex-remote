@@ -102868,13 +102868,14 @@ var AcpRemoteGateway = class {
   }
   async listCatalogSessions(backend, cwd2) {
     const { client, assertCurrent } = this.captureCatalogClient(backend);
+    const windowsAntigravity = backend === "antigravity" && process.platform === "win32";
     const items = [];
     let cursor3;
     const seen = /* @__PURE__ */ new Set();
     for (let page = 0; page < 100; page++) {
       let result;
       try {
-        result = await client.call("session/list", { ...cwd2 ? { cwd: cwd2 } : {}, ...cursor3 ? { cursor: cursor3 } : {} });
+        result = await client.call("session/list", { ...cwd2 && !windowsAntigravity ? { cwd: cwd2 } : {}, ...cursor3 ? { cursor: cursor3 } : {} });
       } catch (error62) {
         if (backend === "cursor" && !(error62 instanceof CursorAcpError && (error62.code === "ACP_AUTH_REQUIRED" || error62.authDiagnostic?.authStatus === "auth_required"))) {
           return items;
@@ -102890,7 +102891,9 @@ var AcpRemoteGateway = class {
       }
       for (const item of result.sessions) {
         if (!isRecord22(item) || typeof item.sessionId !== "string" || typeof item.cwd !== "string") continue;
-        const canonical = await this.requireExistingDirectory(item.cwd).catch(() => void 0);
+        // Antigravity on Windows lists drive paths in URI form, such as /C:/work.
+        const path = windowsAntigravity ? item.cwd.replace(/^\/(?=[a-z]:\/)/i, "") : item.cwd;
+        const canonical = await this.requireExistingDirectory(path).catch(() => void 0);
         assertCurrent();
         if (!canonical || cwd2 && canonical !== cwd2) continue;
         if (this.sessionBackends.has(item.sessionId) && this.sessionBackends.get(item.sessionId) !== backend) continue;
@@ -115638,4 +115641,4 @@ export {
 */
 //# sourceMappingURL=index.js.map
 
-export {CodexRemoteClient};
+export {CodexRemoteClient, AgentAcpClient};

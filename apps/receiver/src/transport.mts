@@ -1,5 +1,5 @@
 import {withEmbeddedCredentialLock} from './receiver-runtime.mjs';
-import {CodexRemoteClient,ClientModeRuntime,resolveConfig,IdentityStore,serverStorageDirectory,ClientServerApi,ServerCredentialStore} from './vendor/remote.mjs';
+import {AgentAcpClient,CodexRemoteClient,ClientModeRuntime,resolveConfig,IdentityStore,serverStorageDirectory,ClientServerApi,ServerCredentialStore} from './vendor/remote.mjs';
 import {access} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
@@ -170,12 +170,13 @@ try {
 
  const codex=remote.features.codex===true?new CodexRemoteClient(remote.client):null;
  const context={runtime,connectionId:randomUUID(),deviceId:target.deviceId,deviceName:target.name,
+   antigravity:new AgentAcpClient(remote.client,remote.features.acpModelLoadsSession?['agent.acp.antigravity.model-load.v1']:[]),
    probe:(timeout=6000)=>remote.client.rpc('harness.transport.describe',{},AbortSignal.timeout(timeout)),
    nativeStream:codex,
    ...webPreviewAccess(runtime,remote.client),
    nativeCall:codex?(method,params)=>codex.request(method,params,AbortSignal.timeout(30000)):null,
    lastDisconnect:()=>lastDisconnect,closeDetail:()=>closeDetail,connected:()=>!closeDetail&&remote.client.getStats().connected,transportMode:()=>remote.transport.getStats().mode,nativeCodex:remote.features.codex===true};
- if(codex){
+ if(codex||remote.features.antigravity&&!remote.features.remoteGateway){
    if(remote.features.remoteGateway){
      const {RemoteTypertGateway}=await import('./vendor/remote.mjs');
      const gateway=new RemoteTypertGateway(remote.client);

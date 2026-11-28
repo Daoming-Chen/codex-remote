@@ -1,4 +1,6 @@
+import { createOrchestrator, workspaceKey } from './orchestrator.mjs';
 import { renderWorkbenchPage } from './workbench-page.mjs';
+import { createAntigravity } from './antigravity.mjs';
 import { createDeviceDirectory, deviceDirectoryError, deviceNameEvent } from './device-directory.mjs';
 import {fileChunks, fileMime, filePreview, filePreviewLimit, fileDownloadLimit} from './project-file-content.mjs';
 import {pipeline} from 'node:stream/promises';
@@ -13,8 +15,8 @@ if(deviceId)transportUrl.searchParams.set('device',deviceId);
 const {openRemote,recoverRemote,getLastDisconnect,remoteLines,requireReceiverIdentity,listReceiverDevices,bindReceiverDevice}=await import(transportUrl.href);
 
 
-import {createHash,randomUUID} from 'node:crypto';
-import {access, readFile, writeFile, rename, mkdir, link, unlink, stat} from 'node:fs/promises';
+import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
+import {access, readdir, readFile, writeFile, rename, mkdir, link, unlink, stat} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {gzipSync,gunzipSync} from 'node:zlib';
 
@@ -28,7 +30,23 @@ const deviceScope=deviceId?createHash('sha256').update(deviceId).digest('hex'):'
 if(deviceId)bindReceiverDevice(deviceId);
 const stateRoot=new URL('./state/',import.meta.url);
 const stateDir=deviceScope?new URL('devices/'+deviceScope+'/',stateRoot):stateRoot;
+let orchestrator;
+const observeTurn=(agent,job)=>orchestrator?.observe(agent,job).catch(error=>console.error('Orchestrator observation failed:',error.message));
+const antigravity=createAntigravity(openRemote,stateDir,job=>observeTurn('antigravity',job));
 await mkdir(stateDir,{recursive:true});
+const cliTokenFile=new URL('orchestrator.token',stateRoot);
+if(!moduleUrl.searchParams.has('device')){
+  // The credential stays in the receiver's private state, outside the package manifest.
+  await writeFile(cliTokenFile,randomBytes(32).toString('hex'),{mode:0o600,flag:'wx'}).catch(error=>{
+    if(error.code!=='EEXIST')throw error
+  })
+}
+async function authorizedCli(req,action){
+  const bearer=req.headers.authorization;
+  if(req.headers.origin||!['dispatch','list'].includes(action)||!/^Bearer [0-9a-f]{64}$/.test(bearer||''))return false;
+  const secret=await readFile(cliTokenFile);
+  return secret.length===64 && timingSafeEqual(secret,Buffer.from(bearer.slice(7)))
+}
 const uuid=/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const busy=new Set();
 const liveJobs=new Map();
@@ -96,7 +114,8 @@ async function save(job){
   await writeFile(tmp,JSON.stringify(job),{mode:0o600});
   await rename(tmp,stateFile(job.id));
   if(busy.has(job.id))liveJobs.set(job.id,job);
-  notify(job)
+  notify(job);
+  if(job.status==='done')await observeTurn('codex',job)
 }
 const androidSubmissions=new Map();
 async function persistSubmission(job,input,previous){
@@ -308,7 +327,7 @@ let pluginCatalog;
 const pluginPages=new Map();
 async function nativeModels(call,cwd){
   const models=[];
-  let canSetServiceTier=true, canSetReviewer=true, canSetGoals=true, attachmentUpload=true, hasModelDefaults=true;
+  let canSetServiceTier=true, canSetReviewer=true, canSetGoals=true, attachmentUpload=true, hasModelDefaults=true, hostPermissions=true;
   let cursor;
   do{
     const page=await call('model/list',{limit:100,...(cursor?{cursor}:{})});
@@ -317,6 +336,7 @@ async function nativeModels(call,cwd){
     canSetGoals&&=page.remoteGoalMode===true;
     attachmentUpload&&=page.remoteAttachmentUpload===true;
     hasModelDefaults&&=page.remoteModelDefaults===true;
+    hostPermissions&&=page.remoteHostPermissions===true;
     for(const m of page.data){
       models.push({id:m.model,name:m.displayName,isDefault:m.isDefault,description:m.description||'',
         retirementAt:m.upgradeInfo?.retirementAt,serviceTiers:(m.serviceTiers||[]).filter(tier=>tier.id==='priority'||tier.id==='ultrafast'),
@@ -329,7 +349,7 @@ async function nativeModels(call,cwd){
   const selected=models.find(m=>m.id===config.model)||models.find(m=>m.isDefault);
   const defaults={model:selected?.id,effort:config.effort||selected?.defaultEffort};
   if(Object.hasOwn(config,'serviceTier'))defaults.serviceTier=config.serviceTier;
-  return {models,canSetServiceTier,canSetReviewer,canSetGoals,attachmentUpload,defaults,recentConfigurations:[]}
+  return {models,canSetServiceTier,canSetReviewer,canSetGoals,attachmentUpload,hostPermissions,defaults,recentConfigurations:[]}
 }
 async function models(cwd=''){
   const cached=catalogs.get(cwd);
@@ -1037,13 +1057,16 @@ async function nativeTurn(job,prompt,previous,call){
     const pick=job.selection;
     if(!job.turn){
       if(job.nativeSubmitting)throw Error('主机可能已收到消息，请在主机会话中核对后再发送');
-      if(!['remote-workspace','auto-review'].includes(pick.sandbox)&&!(pick.sandbox==='danger-full-access'&&pick.approvalPolicy==='never'))
+      const useHostPermissions=pick.sandbox==='host-default';
+      if(!useHostPermissions&&!['remote-workspace','auto-review'].includes(pick.sandbox)&&!(pick.sandbox==='danger-full-access'&&pick.approvalPolicy==='never'))
         throw Error('请在任务权限中选择当前主机支持的模式');
       if(pick.collaborationMode==='plan')throw Error('该主机接口尚不支持计划模式');
       const permissionPreset=pick.sandbox==='danger-full-access'?pick.sandbox:'workspace-write';
-      const reviewerSupported=(await models('')).canSetReviewer===true;
+      const catalog=await models('');
+      const reviewerSupported=catalog.canSetReviewer===true;
+      const inherit=useHostPermissions&&catalog.hostPermissions===true;
       if(pick.sandbox==='auto-review'&&!reviewerSupported)throw Error('当前主机连接未提供自动审批');
-      const options={permissionPreset,...(pick.model?{model:pick.model}:{})};
+      const options={...(inherit?{}:{permissionPreset}),...(pick.model?{model:pick.model}:{})};
       if(!previous&&!job.cwd){
         const list=await call('project/list',{limit:100});
         const root=list.data?.find(p=>p.roots?.length)?.roots[0];
@@ -1055,14 +1078,14 @@ async function nativeTurn(job,prompt,previous,call){
       // Hold a subscription while resuming so the host retains the loaded thread.
       if(previous){job.thread=previous;await subscribe()}
       const started=previous?await call('thread/resume',{threadId:previous,...(pick.model?{model:pick.model}:{})}):
-        await call('thread/start',{cwd:job.cwd,...options});
+        await call('thread/start',{cwd:job.cwd,...options,...(inherit?{useHostPermissions:true}:{})});
       job.thread=started.thread.id;
       if(Object.hasOwn(started,'serviceTier'))job.threadServiceTier=started.serviceTier;
       job.nativeSubmitting=true;await save(job);
       if(!previous)await subscribe();
       const input=nativeInput(prompt,pick.structuredInput);
       const result=await call('turn/start',{threadId:job.thread,input,...options,...(pick.effort?{effort:pick.effort}:{}),
-        ...(reviewerSupported?{approvalsReviewer:pick.sandbox==='auto-review'?'auto_review':'user'}:{}),
+        ...(reviewerSupported&&!inherit?{approvalsReviewer:pick.sandbox==='auto-review'?'auto_review':'user'}:{}),
         ...(pick.serviceTier?{serviceTierForTurn:pick.serviceTier}:{})});
       job.turn=result.turn.id;
       job.observedStartAt=Date.now();
@@ -1163,7 +1186,7 @@ const assets=new Map([
 ]);
 // Keep the running receiver's identity when a new package is unpacked over its files.
 const receiverHash=createHash('sha256');
-for(const name of ['server.mjs','transport.mjs','thread-api.py','daemon-turn.py','follow-events.py']){
+for(const name of ['server.mjs','transport.mjs','antigravity.mjs','orchestrator.mjs','orchestrator-cli.mjs','thread-api.py','daemon-turn.py','follow-events.py']){
   const bytes=await readFile(new URL(name,import.meta.url));
   receiverHash.update(createHash('sha256').update(bytes).digest())
 }
@@ -1184,6 +1207,168 @@ async function clientVersion(indexBytes){
   for(const digest of digests)hash.update(digest);
   return hash.digest('hex').slice(0,16)
 }
+function apiError(httpStatus,message){return Object.assign(Error(message),{httpStatus})}
+async function answerCodex(id,{turn,token,answers}) {
+  const job=liveJobs.get(id);
+  const questions=uuid.test(token)&&job?.inputRequests?.[token];
+  if(job?.status!=='waiting'||job.turn!==turn||!questions)throw apiError(409,'此问题已关闭');
+  if(!answers||typeof answers!=='object'||Object.keys(answers).length!==questions.length||
+    !questions.every(q=>{
+      const values=answers[q.id]?.answers;
+      return Object.hasOwn(answers,q.id)&&Array.isArray(values)&&values.length===1&&
+        typeof values[0]==='string'&&values[0].trim()&&
+        (!q.options?.length||q.isOther||q.options.some(o=>o.label===values[0]))
+    }))throw apiError(400,'请回答每个问题');
+  if(job.backend==='native'){
+    const approval=nativeApprovals.get(token),decision=nativeDecisions.get(answers.decision?.answers?.[0]);
+    if(approval?.job!==job||approval.turn!==turn||approval.sending||!decision)throw apiError(409,'审批请求已关闭或正在提交');
+    approval.sending=true;
+    try{
+      const client=(await openRemote()).nativeStream;
+      await client.respond(token,decision,AbortSignal.timeout(10000))
+    }catch(error){
+      if(error.code!=='CODEX_APPROVAL_NOT_FOUND'){approval.sending=false;throw error}
+      delete job.inputRequests[token];nativeApprovals.delete(token);notify(job);
+      throw apiError(409,'主机上的审批请求已关闭')
+    }
+    delete job.inputRequests[token];nativeApprovals.delete(token);notify(job);
+    return {token}
+  }
+  const base=directory(id),tmp=base+'/input-'+randomUUID(),dest=base+'/answer-'+token;
+  const parts=Buffer.from(JSON.stringify(answers)).toString('base64').match(/.{1,2000}/g);
+  try{
+    for(const [i,part] of parts.entries()){
+      const ok=await readRemote('umask 077; printf %s '+part+' | base64 -d >'+tmp+'-'+i+' && echo OK');
+      if(ok!=='OK')throw Error('主机未确认收到回答')
+    }
+    if(!job.inputRequests?.[token])throw apiError(409,'此问题已关闭');
+    const files=parts.map((_,i)=>tmp+'-'+i).join(' ');
+    const result=await command('umask 077; if cat '+files+' >'+tmp+'; then '+
+      'if ln '+tmp+' '+dest+' 2>/dev/null; then echo OK; '+
+      'elif test -f '+dest+'; then cmp -s '+tmp+' '+dest+
+      '; case $? in 0) echo OK;; 1) echo CONFLICT;; esac; fi; fi');
+    if(result==='CONFLICT')throw apiError(409,'主机已有其他回答');
+    if(result!=='OK')throw apiError(503,'主机未确认保存回答，请重试');
+    // The host has reserved the token. Other viewers can dismiss this form
+    // immediately, even while the host response event is still in transit.
+    if(job.inputRequests?.[token]){
+      delete job.inputRequests[token];
+      notify(job)
+    }
+    return {token}
+  }finally{void command('rm -f '+[tmp,...parts.map((_,i)=>tmp+'-'+i)].join(' ')).catch(()=>{})}
+}
+
+async function interruptCodex(id) {
+  const job=liveJobs.get(id)||await readStoredJob(id);
+  if(job.backend==='native'&&uuid.test(job.thread)&&uuid.test(job.turn)&&job.status==='waiting'){
+    await (await openRemote()).nativeCall('turn/interrupt',{threadId:job.thread,turnId:job.turn});return {id}
+  }
+  if(job.backend!=='daemon'||!uuid.test(job.thread)||!uuid.test(job.turn)||job.status!=='waiting')
+    throw apiError(409,'当前任务尚不可停止或已经结束');
+  const result=await readRemote('python3 '+directory(id)+'/turn.py --interrupt '+job.thread+' '+job.turn);
+  if(result!=='INTERRUPT_ACCEPTED')throw apiError(409,'主机未确认停止请求');
+  return {id}
+}
+
+async function submitCodex(body,verifiedWorkspace=false) {
+  const {id,prompt,parent,expectedThread,cwd,projectId,model,effort,serviceTier,collaborationMode,approvalPolicy="never",sandbox="read-only",images=[]}=body;
+  if(!['never','untrusted'].includes(approvalPolicy))throw apiError(400,'无效审批策略');
+  if(collaborationMode!=null&&!['plan','default'].includes(collaborationMode))throw apiError(400,'无效的协作模式');
+  if(!['read-only','workspace-write','danger-full-access','remote-workspace','ask-for-approval','auto-review','host-default'].includes(sandbox))throw apiError(400,'无效的沙箱模式');
+  if(!validImages(images))throw apiError(400,'仅支持总计 256 KiB 以内的 PNG、JPEG 和 WebP 图片');
+  if(!uuid.test(id)||typeof prompt!=='string'||(!prompt.trim()&&!images.length)||Buffer.byteLength(prompt)>16000)throw apiError(400,'请输入不超过 16 KB 的消息');
+  await requireReceiverIdentity();
+  if(sandbox==='auto-review'&&deviceId&&(await openRemote()).nativeCall&&!(await models('')).canSetReviewer)
+    throw apiError(400,'当前主机连接未提供自动审批');
+  if(collaborationMode==='plan'&&deviceId&&(await openRemote()).nativeCall)
+    throw apiError(400,'当前主机连接仅支持普通聊天');
+  let previous=null,project=cwd;
+  if(expectedThread!=null&&!uuid.test(expectedThread)||parent&&!uuid.test(parent))throw apiError(400,'无效会话');
+  if(parent||expectedThread){
+    let prior;
+    if(parent){
+      try{prior=await readStoredJob(parent)}
+      catch(error){if(error.code!=='ENOENT'||!expectedThread)throw error}
+    }
+    if(expectedThread&&prior?.thread!==expectedThread){
+      const target=await remoteThreads('shared-read',expectedThread);
+      if(target.thread!==expectedThread)throw apiError(409,'无法确认续聊目标，请重新打开会话');
+      if(target.activeTurn)throw Object.assign(apiError(409,'此会话正在运行，请打开当前任务后补充要求'),{code:'SESSION_BUSY'});
+      if(verifiedWorkspace && workspaceKey(target.cwd)!==workspaceKey(cwd))throw apiError(409,'目标会话的项目已更改');
+      previous=target.thread;project=target.cwd
+    }else{
+      if(!['done','interrupted'].includes(prior.status)||!uuid.test(prior.thread))throw apiError(409,'上一轮尚未完成');
+      previous=prior.thread;project=prior.cwd
+    }
+  }else{
+    // A verified delegation can introduce an AGY workspace to Codex for the first time.
+    if(!verifiedWorkspace&&!await isKnownChatProject(project,projectId))throw apiError(400,'请重新从主机加载项目')
+  }
+  if(model||effort||serviceTier!=null){
+    const catalog=await models(project||'');
+    if(serviceTier!=null&&catalog.canSetServiceTier===false)throw apiError(400,'当前主机的 Remote 插件只支持沿用主机速度');
+    const selected=catalog.models.find(m=>m.id===model);
+    if(!selected||effort&&!selected.efforts.includes(effort))throw apiError(400,'所选模型或推理强度不在主机目录中')
+    if(serviceTier!=null&&serviceTier!=='default'&&!selected.serviceTiers?.some(t=>t.id===serviceTier))throw apiError(400,'该模型不支持所选服务档位')
+  }
+  const job={id,status:'preparing',backend:'daemon',imageSteer:true,created:Date.now(),title:prompt.trim().split('\n')[0].slice(0,85),cwd:project||null,selection:{model,effort,serviceTier,sandbox,approvalPolicy,collaborationMode,projectId:previous?null:projectId,structuredInput:images.length>0}};
+  const input=turnInput(prompt,images);
+  if(!await persistSubmission(job,input,previous))return {id,created:false};
+  if(!previous)freshInputs.set(id,{text:prompt,images});
+  if(!busy.has(id)){busy.add(id);void work(job,input,previous,true)}
+  return {id,created:true}
+}
+
+async function codexStatus(id) {
+  const stored=liveJobs.get(id)||await readStoredJob(id);
+  const {submission,...job}=stored;
+  if(!busy.has(id)){
+    if(job.status==='waiting'){busy.add(id);void work(job,null,null)}
+    else if(job.status==='preparing'){
+      if(submission){busy.add(id);void work(job,submission.input,submission.previous)}
+      else{job.status='error';job.error='旧版本服务在提交之前中断'}
+    }
+  }
+  return liveJobs.get(id)||job;
+}
+
+const orchestrationListeners=new Set();
+function orchestrationFrame(type,data){return 'event: '+type+'\ndata: '+JSON.stringify(data)+'\n\n'}
+if(deviceId)orchestrator=await createOrchestrator({
+  antigravity,stateDir,
+  onEvent(type,data){
+    const frame=orchestrationFrame(type,data);
+    for(const res of orchestrationListeners){if(res.writableNeedDrain)res.end();else res.write(frame)}
+  },
+  codexBridge:{
+    async sessions({cwd}){
+      const first=await firstDirectoryPage();
+      const project=first.projects?.find(p=>p.roots?.some(path=>workspaceKey(path)===workspaceKey(cwd)));
+      const query=project?.id?{projectId:project.id}:{projectCwd:cwd};
+      const items=[],seen=new Set();
+      let cursor;
+      do{
+        const page=await remoteThreads('project-page',JSON.stringify({...query,cursor}));
+        items.push(...page.items);cursor=page.cursor;
+        if(seen.has(cursor))break;seen.add(cursor)
+      }while(cursor);
+      return items.filter(i=>i.cwd&&workspaceKey(i.cwd)===workspaceKey(cwd)).map(i=>({
+        agent:'codex',cwd:i.cwd,sessionId:i.thread,title:i.title,projectId:i.projectId
+      }))
+    },
+    async startTurn({id,cwd,projectId,sessionId,prompt,model,effort,serviceTier,sandbox,approvalPolicy}){
+      const native=(await openRemote()).nativeCall;
+      return submitCodex({id,cwd,expectedThread:sessionId,prompt,model,effort,serviceTier,
+        projectId:knownProjectIds.has(projectId)?projectId:null,sandbox:sandbox||(native?'remote-workspace':'ask-for-approval'),approvalPolicy},true)
+    },
+    getTurnStatus:codexStatus,
+    cancelTurn:interruptCodex,
+    async answerApproval(id,token,decision){
+      return answerCodex(id,{turn:liveJobs.get(id)?.turn,token,answers:{decision:{answers:[decision==='allow-once'?'仅允许本次':'拒绝']}}})
+    }
+  }
+});
 export async function handleRequest(req,res,deviceName='所选设备'){
   const json=(code,value)=>{res.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value))};
   try{
@@ -1209,7 +1394,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         req.url=path;
         const handler=await context;
         if(!hostDirectory.devices.has(scope)){res.setHeader('X-Receiver-Device-Access','revoked');return json(403,{error:'当前账号无法访问此设备'})}
-        if(req.method==='GET'&&(path==='/api/directory-events'||path.startsWith('/api/thread-events/')||/^\/api\/turn\/[^/]+\/events$/.test(path)))
+        if(req.method==='GET'&&(path==='/api/directory-events'||path==='/api/orchestrator/events'||path.startsWith('/api/thread-events/')||/^\/api\/turn\/[^/]+\/events$/.test(path)))
           hostDirectory.watch(scope,res,path==='/api/directory-events');
         return await handler.handleRequest(req,res,hostDirectory.devices.get(scope).name||'所选设备')
       }
@@ -1218,6 +1403,32 @@ export async function handleRequest(req,res,deviceName='所选设备'){
         res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
         return res.end(await readFile(new URL('devices.html',import.meta.url)))
       }
+    }
+    if(orchestrator&&req.url==='/api/orchestrator/events'&&req.method==='GET'){
+      if(req.headers['sec-fetch-site']!=='same-origin')return json(403,{error:'无效订阅'});
+      res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Accel-Buffering':'no'});
+      res.write(orchestrationFrame('snapshot',orchestrator.list()));
+      orchestrationListeners.add(res);
+      const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);
+      res.once('close',()=>{clearInterval(heartbeat);orchestrationListeners.delete(res)});return
+    }
+    if(orchestrator&&req.method==='POST'&&req.url.startsWith('/api/orchestrator/')){
+      const action=req.url.slice('/api/orchestrator/'.length);
+      const cli=await authorizedCli(req,action);
+      if((!cli&&req.headers.origin!==origin)||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
+      const chunks=[];let size=0;
+      for await(const chunk of req){size+=chunk.length;if(size>64000)return json(413,{error:'调度请求过长'});chunks.push(chunk)}
+      const body=JSON.parse(Buffer.concat(chunks));
+      if(action==='list')return json(200,{...orchestrator.list(body),...(body.cwd?{sessions:await orchestrator.sessions(body.cwd)}:{})});
+      if(!['dispatch','approve','cancel','policy'].includes(action))return json(404,{error:'未知调度操作'});
+      return json(200,await orchestrator[action](body,cli))
+    }
+    if(deviceId&&req.method==='POST'&&req.url.startsWith('/api/antigravity/')){
+      if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
+      const chunks=[];let size=0;
+      for await(const chunk of req){size+=chunk.length;if(size>450000)return json(413,{error:'消息过长'});chunks.push(chunk)}
+      try{return json(200,await antigravity(req.url.slice('/api/antigravity/'.length),JSON.parse(Buffer.concat(chunks))))}
+      catch(error){return json(error.httpStatus||400,{error:error.message})}
     }
     if(req.method==='POST'&&req.url==='/api/resume'){
       if(!deviceId||req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
@@ -1372,7 +1583,11 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(snapshot.thread!==thread)return json(409,{error:'共享 App Server 暂未返回该会话状态'});
       return json(200,snapshot)
     }
-    if(req.method==='GET'&&req.url==='/api/native-capability')return json(200,{native:!!(deviceId&&(await openRemote()).nativeCall)});
+    if(req.method==='GET'&&req.url==='/api/native-capability'){
+      const native=!!(deviceId&&(await openRemote()).nativeCall);
+      const catalog=native?await models('').catch(()=>null):null;
+      return json(200,{native,hostPermissions:!native||catalog?.hostPermissions===true});
+    }
     if(req.method==='GET'&&req.url==='/api/web-preview/ports'){
       if(req.headers['sec-fetch-site']!=='same-origin')return json(403,{error:'无效请求来源'});
       const {ports}=await (await openRemote()).listPreviewPorts();
@@ -1782,54 +1997,7 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       const id=req.url.slice('/api/answer/'.length);
       if(!uuid.test(id))return json(400,{error:'无效任务'});
       const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>16000)return json(413,{error:'回答超过 16 KB'});chunks.push(chunk)}
-      const {turn,token,answers}=JSON.parse(Buffer.concat(chunks)),job=liveJobs.get(id);
-      const questions=uuid.test(token)&&job?.inputRequests?.[token];
-      if(job?.status!=='waiting'||job.turn!==turn||!questions)return json(409,{error:'此问题已关闭'});
-      if(!answers||typeof answers!=='object'||Object.keys(answers).length!==questions.length||
-        !questions.every(q=>{
-          const values=answers[q.id]?.answers;
-          return Object.hasOwn(answers,q.id)&&Array.isArray(values)&&values.length===1&&
-            typeof values[0]==='string'&&values[0].trim()&&
-            (!q.options?.length||q.isOther||q.options.some(o=>o.label===values[0]))
-        }))return json(400,{error:'请回答每个问题'});
-      if(job.backend==='native'){
-        const approval=nativeApprovals.get(token),decision=nativeDecisions.get(answers.decision?.answers?.[0]);
-        if(approval?.job!==job||approval.turn!==turn||approval.sending||!decision)return json(409,{error:'审批请求已关闭或正在提交'});
-        approval.sending=true;
-        try{
-          const client=(await openRemote()).nativeStream;
-          await client.respond(token,decision,AbortSignal.timeout(10000))
-        }catch(error){
-          if(error.code!=='CODEX_APPROVAL_NOT_FOUND'){approval.sending=false;throw error}
-          delete job.inputRequests[token];nativeApprovals.delete(token);notify(job);
-          return json(409,{error:'主机上的审批请求已关闭'})
-        }
-        delete job.inputRequests[token];nativeApprovals.delete(token);notify(job);
-        return json(202,{token})
-      }
-      const base=directory(id),tmp=base+'/input-'+randomUUID(),dest=base+'/answer-'+token;
-      const parts=Buffer.from(JSON.stringify(answers)).toString('base64').match(/.{1,2000}/g);
-      try{
-        for(const [i,part] of parts.entries()){
-          const ok=await readRemote('umask 077; printf %s '+part+' | base64 -d >'+tmp+'-'+i+' && echo OK');
-          if(ok!=='OK')throw Error('主机未确认收到回答')
-        }
-        if(!job.inputRequests?.[token])return json(409,{error:'此问题已关闭'});
-        const files=parts.map((_,i)=>tmp+'-'+i).join(' ');
-        const result=await command('umask 077; if cat '+files+' >'+tmp+'; then '+
-          'if ln '+tmp+' '+dest+' 2>/dev/null; then echo OK; '+
-          'elif test -f '+dest+'; then cmp -s '+tmp+' '+dest+
-          '; case $? in 0) echo OK;; 1) echo CONFLICT;; esac; fi; fi');
-        if(result==='CONFLICT')return json(409,{error:'主机已有其他回答'});
-        if(result!=='OK')return json(503,{error:'主机未确认保存回答，请重试'});
-        // The host has reserved the token. Other viewers can dismiss this form
-        // immediately, even while the host response event is still in transit.
-        if(job.inputRequests?.[token]){
-          delete job.inputRequests[token];
-          notify(job)
-        }
-        return json(202,{token})
-      }finally{void command('rm -f '+[tmp,...parts.map((_,i)=>tmp+'-'+i)].join(' ')).catch(()=>{})}
+      return json(202,await answerCodex(id,JSON.parse(Buffer.concat(chunks))))
     }
     if(req.method==='POST'&&(req.url?.startsWith('/api/steer/')||req.url?.startsWith('/api/thread-steer/'))){
       if(req.headers.origin!==origin||req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
@@ -1897,89 +2065,26 @@ export async function handleRequest(req,res,deviceName='所选设备'){
       if(req.headers.origin!==origin)return json(403,{error:'无效请求来源'});
       const id=req.url.slice('/api/interrupt/'.length);
       if(!uuid.test(id))return json(400,{error:'无效任务'});
-      const job=liveJobs.get(id)||await readStoredJob(id);
-      if(job.backend==='native'&&uuid.test(job.thread)&&uuid.test(job.turn)&&job.status==='waiting'){
-        await (await openRemote()).nativeCall('turn/interrupt',{threadId:job.thread,turnId:job.turn});return json(202,{id})
-      }
-      if(job.backend!=='daemon'||!uuid.test(job.thread)||!uuid.test(job.turn)||job.status!=='waiting')
-        return json(409,{error:'当前任务尚不可停止或已经结束'});
-      const result=await readRemote('python3 '+directory(id)+'/turn.py --interrupt '+job.thread+' '+job.turn);
-      if(result!=='INTERRUPT_ACCEPTED')return json(409,{error:'主机未确认停止请求'});
-      return json(202,{id})
+      return json(202,await interruptCodex(id))
     }
     if(req.method==='POST' && req.url==='/api/turn'){
       if(req.headers.origin!==origin || req.headers['content-type']!=='application/json')return json(403,{error:'无效请求来源'});
       const chunks=[];let length=0;
       for await(const chunk of req){length+=chunk.length;if(length>450000)return json(413,{error:'消息过长'});chunks.push(chunk)}
-      const {id,prompt,parent,expectedThread,cwd,projectId,model,effort,serviceTier,collaborationMode,approvalPolicy="never",sandbox="read-only",images=[]}=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if(!['never','untrusted'].includes(approvalPolicy))return json(400,{error:'无效审批策略'});
-      if(collaborationMode!=null&&!['plan','default'].includes(collaborationMode))return json(400,{error:'无效的协作模式'});
-      if(!['read-only','workspace-write','danger-full-access','remote-workspace','ask-for-approval','auto-review'].includes(sandbox))return json(400,{error:'无效的沙箱模式'});
-      if(!validImages(images))return json(400,{error:'仅支持总计 256 KiB 以内的 PNG、JPEG 和 WebP 图片'});
-      if(!uuid.test(id)||typeof prompt!=='string'||(!prompt.trim()&&!images.length)||Buffer.byteLength(prompt)>16000)return json(400,{error:'请输入不超过 16 KB 的消息'});
-      await requireReceiverIdentity();
-      if(sandbox==='auto-review'&&deviceId&&(await openRemote()).nativeCall&&!(await models('')).canSetReviewer)
-        return json(400,{error:'当前主机连接未提供自动审批'});
-      if(collaborationMode==='plan'&&deviceId&&(await openRemote()).nativeCall)
-        return json(400,{error:'当前主机连接仅支持普通聊天'});
-      let previous=null,project=cwd;
-      if(expectedThread!=null&&!uuid.test(expectedThread)||parent&&!uuid.test(parent))return json(400,{error:'无效会话'});
-      if(parent||expectedThread){
-        let prior;
-        if(parent){
-          try{prior=await readStoredJob(parent)}
-          catch(error){if(error.code!=='ENOENT'||!expectedThread)throw error}
-        }
-        if(expectedThread&&prior?.thread!==expectedThread){
-          const target=await remoteThreads('shared-read',expectedThread);
-          if(target.thread!==expectedThread)return json(409,{error:'无法确认续聊目标，请重新打开会话'});
-          if(target.activeTurn)return json(409,{error:'此会话正在运行，请打开当前任务后补充要求'});
-          previous=target.thread;project=target.cwd
-        }else{
-          if(!['done','interrupted'].includes(prior.status)||!uuid.test(prior.thread))return json(409,{error:'上一轮尚未完成'});
-          previous=prior.thread;project=prior.cwd
-        }
-      }else{
-        if(!await isKnownChatProject(project,projectId))return json(400,{error:'请重新从主机加载项目'})
-      }
-      if(model||effort||serviceTier!=null){
-        const catalog=await models(project||'');
-        if(serviceTier!=null&&catalog.canSetServiceTier===false)return json(400,{error:'当前主机的 Remote 插件只支持沿用主机速度'});
-        const selected=catalog.models.find(m=>m.id===model);
-        if(!selected||effort&&!selected.efforts.includes(effort))return json(400,{error:'所选模型或推理强度不在主机目录中'})
-        if(serviceTier!=null&&serviceTier!=='default'&&!selected.serviceTiers?.some(t=>t.id===serviceTier))return json(400,{error:'该模型不支持所选服务档位'})
-      }
-      const job={id,status:'preparing',backend:'daemon',imageSteer:true,created:Date.now(),title:prompt.trim().split('\n')[0].slice(0,85),cwd:project||null,selection:{model,effort,serviceTier,sandbox,approvalPolicy,collaborationMode,projectId:previous?null:projectId,structuredInput:images.length>0}};
-      const input=turnInput(prompt,images);
-      if(!await persistSubmission(job,input,previous))return json(200,{id});
-      if(!previous)freshInputs.set(id,{text:prompt,images});
-      if(!busy.has(id)){busy.add(id);void work(job,input,previous,true)}
-      return json(202,{id})
+      const result=await submitCodex(JSON.parse(Buffer.concat(chunks)));
+      return json(result.created?202:200,{id:result.id})
     }
     const id=req.url?.split('/')[3];
     const stream=req.url==='/api/turn/'+id+'/events';
     if(req.method==='GET' && (stream||req.url==='/api/turn/'+id) && uuid.test(id)){
-      let stored=liveJobs.get(id);
-      if(!stored){
-        try{stored=await readStoredJob(id)}
-        catch(error){
-          if(error.code==='ENOENT')return json(404,{error:'无法找到这轮对话'});
-          return json(500,{error:'暂时无法读取本轮提交记录'})
-        }
-      }
-      const {submission,...job}=stored;
-      if(!busy.has(id)){
-        if(job.status==='waiting'){busy.add(id);void work(job,null,null)}
-        else if(job.status==='preparing'){
-          if(submission){busy.add(id);void work(job,submission.input,submission.previous)}
-          else{job.status='error';job.error='旧版本服务在提交之前中断'}
-        }
-      }
+      let job;
+      try{job=await codexStatus(id)}catch(error){return json(error.code==='ENOENT'?404:500,{error:'无法读取本轮提交记录'})}
       if(stream)return streamJob(res,liveJobs.get(id)||job);
       return json(200,job)
     }
     json(404,{error:'未找到'})
   }catch(e){
+    if(e.httpStatus && !res.headersSent)return json(e.httpStatus,{error:e.message});
     if(res.headersSent||res.destroyed){res.destroy();return}
     if(req.url?.startsWith('/api/web-preview/')){
       if(e.code==='LOOPBACK_PORT_DENIED')return json(403,{code:e.code,error:'主机尚未允许预览此端口。主机授权后可重新打开。'});
@@ -2000,6 +2105,26 @@ export async function handleRequest(req,res,deviceName='所选设备'){
   }
 }
 const app=createServer(handleRequest);
+async function restoreOrchestrationDevices(){
+  const dir=new URL('devices/',stateRoot);
+  const entries=await readdir(dir,{withFileTypes:true}).catch(error=>{if(error.code==='ENOENT')return [];throw error});
+  const pending=[];
+  for(const entry of entries){
+    if(!entry.isDirectory()||!(/^[0-9a-f]{64}$/).test(entry.name))continue;
+    try{
+      const data=JSON.parse(await readFile(new URL(entry.name+'/orchestrator/state.json',dir),'utf8'));
+      if(data.records.some(r=>!['done','failed','rejected','stopped'].includes(r.status)))pending.push(entry.name)
+    }catch(error){if(error.code!=='ENOENT')console.error('Orchestrator recovery:',error.message)}
+  }
+  if(!pending.length)return;
+  await hostDirectory.list();
+  for(const scope of pending){
+    const device=hostDirectory.devices.get(scope);
+    if(!device||deviceContexts.has(scope))continue;
+    const url=new URL(import.meta.url);url.searchParams.set('device',device.deviceId);
+    const context=import(url.href);deviceContexts.set(scope,context);await context
+  }
+}
 function openWorkbench(){
   if(!process.argv.includes('--open'))return;
   const onError=error=>{if(error)console.error('请在浏览器打开 '+origin+'/')};
@@ -2035,6 +2160,12 @@ app.once('error',async error=>{
 if(!moduleUrl.searchParams.has('device'))app.listen(port,'127.0.0.1',()=>{
   console.log('Codex 远程工作台已在 '+origin+' 启动，请在网页选择设备。');
   openWorkbench();
+  if(!deviceId){
+    const restore=()=>restoreOrchestrationDevices().catch(error=>{
+      console.error('Orchestrator recovery:',error.message);setTimeout(restore,30000).unref()
+    });
+    void restore()
+  }
   if(deviceId)models().then(
     ()=>console.log('所选设备已就绪。'),
     ()=>console.log('所选设备模型目录尚未就绪，下一次模型请求会重试。')

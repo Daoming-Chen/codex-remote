@@ -785,10 +785,10 @@ def main():
         preset = sandbox
         if preset in ("auto-review", "ask-for-approval"):
             sandbox = "workspace-write"
-        if sandbox not in ("read-only","workspace-write","danger-full-access"): raise ValueError("未知的沙箱模式")
+        if sandbox not in ("read-only","workspace-write","danger-full-access","host-default"): raise ValueError("未知的沙箱模式")
         approval = selection.get("approvalPolicy") or "never"
         if approval not in ("never","untrusted"): raise ValueError("未知审批策略")
-        setup = {"sandbox":sandbox,"approvalPolicy":approval}
+        setup = {} if preset == "host-default" else {"sandbox":sandbox,"approvalPolicy":approval}
         reviewer = "auto_review" if preset == "auto-review" else "user"
         if preset in ("auto-review", "ask-for-approval"):
             approval = "on-request"
@@ -809,8 +809,8 @@ def main():
                       "excludeTmpdirEnvVar":True,"excludeSlashTmp":True}
         elif sandbox == "danger-full-access":
             policy = {"type":"dangerFullAccess"}
-        turn_policy = {"sandboxPolicy":policy,"approvalPolicy":approval}
-        turn_policy["approvalsReviewer"] = reviewer
+        turn_policy = {} if preset == "host-default" else {
+            "sandboxPolicy":policy,"approvalPolicy":approval,"approvalsReviewer":reviewer}
         # A running Desktop daemon may resume a loaded thread with its previous defaults.
         for key in ("model", "effort"):
             if selection.get(key): turn_policy[key] = selection[key]

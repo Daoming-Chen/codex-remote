@@ -711,7 +711,7 @@ for(const superseded of [false,true])test('network recovery restores the same tu
       await page.evaluate(() => { void window.receiverNetworkResumed!() });
     }else{
       failFirst();
-      await page.locator('.rail-profile[data-offline]').waitFor()
+      await page.locator('#device-switch[data-offline]').waitFor()
     }
     assert.equal(await page.locator('main .connection-recovery').count(),0);
     await page.locator('#messages').getByText('恢复后收到原轮次的回复',{exact:true}).waitFor();
@@ -719,7 +719,7 @@ for(const superseded of [false,true])test('network recovery restores the same tu
     // A late failure must not mark the restored connection offline or start another retry.
     await page.waitForTimeout(1200);
     assert.equal(await draft.inputValue(),'切网时仍在编辑');
-    assert.equal(await page.locator('.rail-profile[data-offline]').count(),0);
+    assert.equal(await page.locator('#device-switch[data-offline]').count(),0);
     assert.equal(resumeCount,2);
     const reconnectEvents=await page.evaluate(async()=>{
       let count=0;

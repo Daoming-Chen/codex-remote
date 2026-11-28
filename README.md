@@ -12,16 +12,19 @@ npm ci --prefix web/vendor
 npm run build
 ```
 
-Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打开 Remote 授权页和本机工作台。默认地址为 `http://127.0.0.1:47831/`。从设备列表选择在线主机，之后可点击最左下角的主机缩写切换设备。浏览器草稿和接收服务的任务记录按设备 ID 隔离。主机需已安装并授权可用的 ds-harness-remote 和 Codex。详细步骤见 [使用说明](web/使用说明.txt)。
+Windows 运行 `web\start.cmd`，Linux 运行 `sh web/start.sh`。脚本会打开 Remote 授权页和本机工作台。默认地址为 `http://127.0.0.1:47831/`。从设备列表选择在线主机，之后可在左侧栏顶部点击主机名称，从下拉列表切换设备。浏览器草稿和接收服务的任务记录按设备 ID 隔离。主机需已安装并授权可用的 ds-harness-remote 和 Codex。详细步骤见 [使用说明](web/使用说明.txt)。
 
 ## 在平板上查看主机项目
 
 首次安装 Android 应用后，在「打开设备授权」中完成 Remote 授权，再选择该身份可访问的主机。授权保存在这台设备的应用私有数据中。覆盖更新 APK 会保留授权，另一台设备首次安装时需要单独授权。
 
-选择主机和项目后，在新聊天顶部点「切换侧面板」，或在已有聊天顶部点「显示标签页」。在「新标签页」的「搜索文件或输入 URL」中输入文件名或开发服务地址即可打开结果。点面板里的加号还可以选择以下工具。
+主机同时提供 Codex 和 Antigravity 时，项目侧栏按最近活动混排两种会话，标题旁标明助手。点会话即可继续工作，点项目右侧的新建按钮可为新会话选择助手。切到另一条会话后，在途回复仍写入原会话，每条会话单独保留草稿。
 
-- 选择「文件资源管理器」可以展开项目目录、读取工作树中的文本文件。点击回复中的项目文件链接可定位到相应文件和行。
-- 选择「浏览器」可以打开主机上的开发服务。先在主机的 ds-harness-remote 设置中允许服务端口，再选择该端口或输入带路径的地址，例如 `http://localhost:5173/app/`。这里的 `localhost` 指所选主机。聊天回复中的本地网页链接也可以直接打开预览。
+选择主机和项目后，在新聊天顶部点「切换侧面板」，或在已有聊天顶部点「显示标签页」。右侧栏提供「文件资源管理器」和「侧边聊天」。主聊天开始后可以使用侧边聊天。
+
+文件资源管理器可展开项目目录并预览文件。工具栏的搜索入口支持文件名和主机开发服务地址，例如 `http://localhost:5173/app/`。网页预览要求主机的 ds-harness-remote 已放行对应端口。聊天回复中的项目文件和本地网页链接也可以直接打开。
+
+左侧「账号用量」显示 Codex 与 Antigravity CLI 各模型组的剩余百分比和重置时间。Antigravity 数据来自所选主机的 `agy /usage`，对应主机 Antigravity CLI 登录的账号。原生主机需要更新下方的兼容插件。
 
 Android 返回前台或切换网络时会检查所选主机的连接。工作台显示「正在等待」时会自动重试，也可以点「立即重试」。恢复后，工作台按原任务标识继续接收回复。
 
@@ -52,7 +55,7 @@ Android 选定主机后默认开启「后台保持连接」，通过系统前台
 
 在主聊天或侧聊打开「＋ → 添加本地文件」，从 Android 系统文件选择器选择文件。支持上传的主机会把原文件保存到当前项目下独立的 `.codex-upload-<编号>` 目录。发送消息时附上主机路径，Codex 可以按该轮的任务权限读取文件。原文件保留在主机项目中，删除平板草稿里的附件不会删除主机副本。每个文件最多 64 MiB。
 
-在文件资源管理器中，点击文件名可预览，点右侧的下载按钮可直接保存到平板。聊天回复中的项目 APK、PDF 或压缩包链接，以及点开的项目图片，也提供「保存文件」。Android 会弹出系统文件选择器，保存后可用已安装的应用打开。原生主机上的任意格式上传和超过 4 MiB 的下载需要新版的 ds-harness-remote 0.6.8 兼容包，单个下载文件上限为 64 MiB。
+在文件资源管理器中，点击文件名可预览，点右侧的下载按钮可直接保存到平板。聊天回复中的项目 APK、PDF 或压缩包链接，以及点开的项目图片，也提供「保存文件」。Android 10 及以上直接保存到系统「下载」目录。Android 8、9 首次保存时选择文件夹，之后自动沿用。保存完成后可点「打开文件」。原生主机上的任意格式上传和超过 4 MiB 的下载需要新版的 ds-harness-remote 0.6.8 兼容包，单个下载文件上限为 64 MiB。
 
 ## 查看上下文窗口
 
@@ -62,7 +65,7 @@ Android 选定主机后默认开启「后台保持连接」，通过系统前台
 
 在主聊天输入框旁点「＋」并选择「目标」，或输入 `/goal` 并点选命令。写下目标后发送。已有目标的聊天会显示目标卡，可以查看、编辑、暂停、继续或清除目标。替换进行中的目标需要确认。主机暂时无法接受目标时，平板会保留草稿。
 
-权限菜单中的「请求批准」由你决定是否允许需要审批的操作。「帮我批准」使用主机的自动审批。「完全访问权限」需要再次确认。通过原生接口连接的主机需要下方的兼容插件才能启用目标和自动审批。旧插件的能力会显示在平板界面上。
+普通聊天默认沿用主机的权限设置。旧版原生 Codex 插件使用「请求批准」。权限菜单中的「请求批准」由你决定是否允许需要审批的操作。「帮我批准」使用主机的自动审批。「完全访问权限」需要再次确认。通过原生接口连接的主机需要下方的兼容插件才能启用目标和自动审批。旧插件的能力会显示在平板界面上。
 
 ### 复查桌面端交互
 
@@ -80,18 +83,18 @@ Android 选定主机后默认开启「后台保持连接」，通过系统前台
 
 ```powershell
 $plugin = Join-Path $env:USERPROFILE '.dsh/profiles/desktop/node_modules/ds-harness-remote'
-python scripts/host-compat/package_plugin.py $plugin dist/ds-harness-remote-0.6.8-codex-files.tgz
+python scripts/host-compat/package_plugin.py $plugin dist/ds-harness-remote-0.6.8-codex-agy.tgz
 ```
 
 构建脚本只在临时副本中应用补丁。要让 Windows 主机使用兼容包，等主机当前任务结束后完全退出 DeepSeek Harness，再通过其自带的 `dsh.cmd` 安装到 `desktop` 配置。安装完成后重新打开 DeepSeek Harness。
 
 ```powershell
 $dsh = Join-Path $env:LOCALAPPDATA 'Programs/DeepSeek Harness/resources/runtime/cli/bin/dsh.cmd'
-$package = (Resolve-Path 'dist/ds-harness-remote-0.6.8-codex-files.tgz').Path
+$package = (Resolve-Path 'dist/ds-harness-remote-0.6.8-codex-agy.tgz').Path
 & $dsh plugin --profile desktop add -w $package
 ```
 
-已用本机 `dsh.cmd` 将生成的 tarball 安装到隔离的 `web` 配置，并核对安装后的插件入口与通过实测的副本一致。该副本已连接本机 Codex App Server，使用 GPT-6.2 Sol 以 Fast 和 Ultrafast 各完成一轮。运行中主机的插件替换和重启尚未实测。
+此前的速度兼容包已安装到隔离的 `web` 配置，并通过本机 Codex App Server 分别完成 Fast 和 Ultrafast 会话。上述兼容包含沿用主机权限和读取 Antigravity 用量所需的更新。
 
 ## 构建 Web 包
 

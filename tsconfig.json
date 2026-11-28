@@ -24,6 +24,7 @@
     "apps/workbench/src/voice-capture.ts",
     "packages/protocol/**/*.ts",
     "apps/receiver/src/device-directory.mts",
+    "apps/receiver/src/orchestrator*.mts",
     "apps/receiver/src/workbench-page.mts",
     "apps/workbench/src/markdown.ts",
     "tests/*.test.ts",

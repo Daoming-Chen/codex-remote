@@ -18,6 +18,11 @@ for (const [source, output] of [
 ]) {
   for (const name of await readdir(resolve(root, source))) {
     if (!/\.(ts|mts|cts)$/.test(name) || name === 'markdown.ts') continue;
+    if (name === 'orchestrator.mts' || name === 'orchestrator-cli.mts') {
+      await build({absWorkingDir:root, entryPoints:[source + '/' + name], outfile:'web/' + name.replace(/ts$/, 'js'),
+        bundle:true, platform:'node', format:'esm', target:'node18'});
+      continue;
+    }
     const script = await readFile(resolve(root, source, name), 'utf8');
     const filename = name.replace(/ts$/, 'js');
     const emitted = resolve(root, output, filename);

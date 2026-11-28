@@ -9,7 +9,7 @@
     "build": "npm run typecheck && node scripts/build.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p apps/workbench/offline/tsconfig.worker.json",
     "package:web": "npm run build && python scripts/package_web.py",
-    "test:ui": "npm run build && node --test tests/attachment-upload.test.mjs tests/desktop-baseline.test.ts tests/workbench.test.ts tests/resume.test.ts tests/web-preview.test.mjs"
+    "test:ui": "npm run build && node --test tests/antigravity.test.mjs tests/attachment-upload.test.mjs tests/desktop-baseline.test.ts tests/workbench.test.ts tests/resume.test.ts tests/web-preview.test.mjs"
   },
   "dependencies": {
     "core-js": "3.41.0",

@@ -1,5 +1,6 @@
 import './compat/webview.js';
 import { render } from 'preact';
+export { isRemoteDevice } from '../../../packages/protocol/devices.js';
 export { renderAttachments } from './AttachmentTray.js';
 export { hostBrowserAddress, mountHostBrowser } from './HostBrowser.js';
 export { mountNewTabSearch, searchDirectoryFiles } from './PanelSearch.js';
